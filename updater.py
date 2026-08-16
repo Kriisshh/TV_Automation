@@ -26,7 +26,7 @@ import subprocess
 import urllib.request
 
 # ---- bump this each release; must match the release tag (v-prefix optional) ----
-__version__ = "1.0.2"
+__version__ = "1.0.3"
 
 # ---- configure these ----
 GITHUB_OWNER = "Kriisshh"
