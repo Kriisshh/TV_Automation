@@ -34,4 +34,8 @@ jobs:
         with:
           files: dist/ChromeSequencer.exe
           name: ${{ github.ref_name }}
-          generate_release_notes: true
+          body: "ChromeSequencer ${{ github.ref_name }}"
+          # Publish to the public releases-only repo. RELEASES_TOKEN is a PAT
+          # with Contents:read/write on TV_Automation_Releases (source stays private).
+          repository: Kriisshh/TV_Automation_Releases
+          token: ${{ secrets.RELEASES_TOKEN }}
