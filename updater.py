@@ -26,7 +26,7 @@ import subprocess
 import urllib.request
 
 # ---- bump this each release; must match the release tag (v-prefix optional) ----
-__version__ = "1.0.0.1"
+__version__ = "1.0.1"
 
 # ---- configure these ----
 GITHUB_OWNER = "Kriisshh"
@@ -50,13 +50,16 @@ def _parse_version(v):
             else:
                 break
         parts.append(int(num) if num else 0)
-    while len(parts) < 3:
-        parts.append(0)
-    return tuple(parts[:3])
+    return tuple(parts)
 
 
 def _is_newer(latest, current):
-    return _parse_version(latest) > _parse_version(current)
+    a, b = _parse_version(latest), _parse_version(current)
+    # pad the shorter tuple with zeros so e.g. (1,0) vs (1,0,0) compares equal
+    n = max(len(a), len(b))
+    a += (0,) * (n - len(a))
+    b += (0,) * (n - len(b))
+    return a > b
 
 
 def _get_latest_release():
