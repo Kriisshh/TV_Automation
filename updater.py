@@ -26,7 +26,7 @@ import subprocess
 import urllib.request
 
 # ---- bump this each release; must match the release tag (v-prefix optional) ----
-__version__ = "1.0.1"
+__version__ = "1.0.2"
 
 # ---- configure these ----
 GITHUB_OWNER = "Kriisshh"
@@ -118,10 +118,12 @@ def download_and_apply(url, progress_cb=None):
                     progress_cb(done, total)
 
     pid = os.getpid()
+    log = os.path.join(tempfile.gettempdir(), "chromeseq_update.log")
     bat = os.path.join(tempfile.gettempdir(), "chromeseq_update.bat")
     with open(bat, "w", encoding="utf-8") as f:
         f.write(
             "@echo off\r\n"
+            f'echo [%date% %time%] update started, waiting on PID {pid} > "{log}"\r\n'
             ":wait\r\n"
             f'tasklist /fi "PID eq {pid}" | find "{pid}" >nul\r\n'
             "if not errorlevel 1 (\r\n"
@@ -129,7 +131,19 @@ def download_and_apply(url, progress_cb=None):
             "  goto wait\r\n"
             ")\r\n"
             "timeout /t 1 /nobreak >nul\r\n"
-            f'move /y "{new}" "{cur}" >nul\r\n'
+            "set tries=0\r\n"
+            ":trymove\r\n"
+            "set /a tries=tries+1\r\n"
+            f'move /y "{new}" "{cur}" >nul 2>>"{log}"\r\n'
+            f'if exist "{new}" (\r\n'
+            "  if %tries% lss 15 (\r\n"
+            "    timeout /t 1 /nobreak >nul\r\n"
+            "    goto trymove\r\n"
+            "  )\r\n"
+            f'  echo [%date% %time%] move FAILED after %tries% tries >> "{log}"\r\n'
+            "  exit /b 1\r\n"
+            ")\r\n"
+            f'echo [%date% %time%] move OK after %tries% tries, relaunching >> "{log}"\r\n'
             f'start "" "{cur}"\r\n'
             'del "%~f0"\r\n'
         )
