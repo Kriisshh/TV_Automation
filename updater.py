@@ -26,7 +26,7 @@ import subprocess
 import urllib.request
 
 # ---- bump this each release; must match the release tag (v-prefix optional) ----
-__version__ = "1.0.3"
+__version__ = "1.0.4"
 
 # ---- configure these ----
 GITHUB_OWNER = "Kriisshh"
@@ -147,9 +147,11 @@ def download_and_apply(url, progress_cb=None):
             f'start "" "{cur}"\r\n'
             'del "%~f0"\r\n'
         )
+    # CREATE_NO_WINDOW alone keeps the swap script hidden. Combining it with
+    # DETACHED_PROCESS is contradictory and can leak a visible console window.
     subprocess.Popen(
         ["cmd", "/c", bat],
-        creationflags=DETACHED_PROCESS | CREATE_NO_WINDOW,
+        creationflags=CREATE_NO_WINDOW,
         close_fds=True,
     )
     return True

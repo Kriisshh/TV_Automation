@@ -653,7 +653,10 @@ def main():
     root.withdraw()
     try:
         if run_update_flow(root):
-            return  # process exits so the swap script can replace the .exe
+            # Force-exit immediately so the swap script's wait loop sees this
+            # PID disappear. A plain return can hang under --noconsole because
+            # the withdrawn root + update Toplevel keep the interpreter alive.
+            os._exit(0)
     except Exception:
         pass
     root.deiconify()
