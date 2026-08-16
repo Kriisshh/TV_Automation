@@ -1,0 +1,37 @@
+name: Build and Release
+
+# Runs whenever you push a tag like v1.0.0, v1.1.0, etc.
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write   # allows the job to create the release
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'   # stable; avoids PyInstaller lag on brand-new Python
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Build the .exe
+        run: python -m PyInstaller --onefile --noconsole --name ChromeSequencer main.py
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/ChromeSequencer.exe
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
