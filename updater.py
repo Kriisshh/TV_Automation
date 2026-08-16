@@ -26,13 +26,11 @@ import subprocess
 import urllib.request
 
 # ---- bump this each release; must match the release tag (v-prefix optional) ----
-__version__ = "1.0.8"
+__version__ = "1.0.7"
 
 # ---- configure these ----
 GITHUB_OWNER = "Kriisshh"
-# Public releases-only repo. Source lives in the private TV_Automation repo;
-# releases are mirrored here so installs can auto-update without a token.
-GITHUB_REPO = "TV_Automation_Releases"
+GITHUB_REPO = "TV_Automation"
 ASSET_NAME = "ChromeSequencer.exe"
 
 API_URL = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
