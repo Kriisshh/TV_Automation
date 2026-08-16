@@ -26,7 +26,7 @@ import subprocess
 import urllib.request
 
 # ---- bump this each release; must match the release tag (v-prefix optional) ----
-__version__ = "1.0.5"
+__version__ = "1.0.6"
 
 # ---- configure these ----
 GITHUB_OWNER = "Kriisshh"
@@ -144,7 +144,11 @@ def download_and_apply(url, progress_cb=None):
             "  exit /b 1\r\n"
             ")\r\n"
             f'echo [%date% %time%] move OK after %tries% tries, relaunching >> "{log}"\r\n'
-            f'start "" "{cur}"\r\n'
+            # Relaunch via explorer.exe so the app gets a live, valid parent
+            # process (explorer stays running). Launching with cmd's `start`
+            # leaves the app orphaned once this script exits, which trips
+            # parent-process security checks with a bare error box.
+            f'explorer.exe "{cur}"\r\n'
             'del "%~f0"\r\n'
         )
     # CREATE_NO_WINDOW alone keeps the swap script hidden. Combining it with
