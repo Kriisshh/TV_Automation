@@ -1,27 +1,27 @@
 """
-Stream Suite - Windows desktop automation app (two tools in one tabbed window).
+Stream Suite - Windows desktop automation app (three tabs in one window).
 
 Tab 1 - Chrome Sequencer:
-  1. Initial wait (fixed or random)
-  2. Open selected Chrome profiles (1 window each, blank tab)
-  3. Wait for extensions / VPN to load (fixed or random)
-  4. Navigate every profile window to the target URL (1 tab per profile)
-  5. Wait (fixed or random)
-  6. For every profile window: wait, focus it, send the enabled keys ("m" and/or "c")
-  7. Optionally send a user-defined list of final key presses (e.g. f8, f9, f10)
-  When the sequence finishes the app stays open and switches to the Typer tab.
+  Initial wait -> open selected Chrome profiles (1 window each) -> wait for
+  extensions/VPN -> navigate each window to the URL -> wait -> send per-tab keys
+  ("m"/"c") -> optional final key presses. When it finishes the app stays open
+  and switches to the Typer tab.
 
 Tab 2 - Typer:
-  A stream-chat message sequencer. Profile "groups" each own a global hotkey,
-  a switch key, loop settings, and an ordered list of message steps. Pressing a
-  group's hotkey types its messages in sequence. Adapted from TyperV9.
+  Stream-chat message sequencer. Profile "groups" each own a global hotkey, a
+  switch key, loop settings, and an ordered list of message steps. Adapted from
+  TyperV9.
+
+Tab 3 - Application:
+  App-wide settings: launch on startup, auto-run, abort hotkey, update check,
+  and config import/export.
 
 Settings persist next to the app:
-  - config.json          (Chrome Sequencer)
+  - config.json          (Chrome Sequencer + app settings)
   - stream_groups.json   (Typer)
 
-UI: Apple / macOS-inspired light theme (flat, minimal, generous whitespace,
-Segoe UI as the SF-Pro substitute on Windows, system-blue accent).
+UI: Apple / macOS-inspired light theme (flat, minimal, card-based, generous
+whitespace, Segoe UI as the SF-Pro substitute, teal accent).
 
 Deps: pip install keyboard pywin32   (tkinter ships with Python)
 Windows only.
@@ -60,7 +60,7 @@ def app_dir():
     return os.path.dirname(os.path.abspath(__file__))
 
 
-CONFIG_PATH = os.path.join(app_dir(), "config.json")             # Chrome Sequencer
+CONFIG_PATH = os.path.join(app_dir(), "config.json")               # Chrome + app
 STREAM_CONFIG_PATH = os.path.join(app_dir(), "stream_groups.json")  # Typer
 
 
@@ -226,31 +226,30 @@ def force_foreground(hwnd):
 
 
 # ----------------------------------------------------------------------------
-# Apple / macOS-inspired design tokens (light mode)
+# Design tokens (Apple/macOS-inspired light theme, teal accent)
 # ----------------------------------------------------------------------------
 
-MAC_BG = "#F5F5F7"            # window canvas (Apple off-white)
+MAC_BG = "#F5F5F7"            # window canvas
 MAC_CARD = "#FFFFFF"         # cards / content surfaces
 MAC_TEXT = "#1D1D1F"         # primary near-black
 MAC_TEXT_SUB = "#6E6E73"     # secondary gray
-MAC_BORDER = "#D2D2D7"       # separators / control borders
-MAC_ACCENT = "#007AFF"       # system blue
-MAC_ACCENT_HOVER = "#0A6CE0"
-MAC_CONTROL_MUTED = "#EFEFF0"  # subtle neutral button bg
-MAC_CONTROL_HOVER = "#E5E5EA"
-MAC_SUCCESS = "#34C759"
-MAC_DANGER = "#FF3B30"
-MAC_DANGER_HOVER = "#E0352B"
+MAC_BORDER = "#E3E3E6"       # separators / card borders
+MAC_ACCENT = "#0D9488"       # teal
+MAC_ACCENT_HOVER = "#0B7C71"
+MAC_CONTROL_MUTED = "#EEEEF0"  # subtle neutral button bg
+MAC_CONTROL_HOVER = "#E2E2E6"
+MAC_SUCCESS = "#2E9E5B"
+MAC_DANGER = "#E5484D"
+MAC_DANGER_HOVER = "#CE3F44"
 MAC_DISABLED_BG = "#E5E5EA"
 MAC_DISABLED_TEXT = "#B0B0B5"
 
-FONT_FAMILY = "Segoe UI"     # SF Pro substitute on Windows
-FONT_H1 = (FONT_FAMILY, 15, "bold")
+FONT_FAMILY = "Segoe UI"
+FONT_H1 = (FONT_FAMILY, 16, "bold")
 FONT_H2 = (FONT_FAMILY, 12, "bold")
 FONT_BODY = (FONT_FAMILY, 10)
 FONT_BODY_MED = (FONT_FAMILY, 10, "bold")
 FONT_SMALL = (FONT_FAMILY, 9)
-FONT_MONO = ("Consolas", 9)
 
 # --- Aliases so the ported Typer code keeps using its original names ---
 COLOR_BG = MAC_BG
@@ -263,7 +262,7 @@ COLOR_BTN_TEXT = MAC_TEXT
 COLOR_ACCENT = MAC_ACCENT
 COLOR_BORDER_LIGHT = MAC_BORDER
 COLOR_STATUS_ACTIVE = MAC_SUCCESS
-COLOR_STATUS_INACTIVE = "#FF9F0A"
+COLOR_STATUS_INACTIVE = "#C77700"
 
 FONT_TITLE = FONT_H2
 FONT_MAIN = FONT_BODY
@@ -272,7 +271,6 @@ FONT_MONITOR = (FONT_FAMILY, 10, "bold")
 
 
 def apply_mac_theme(root):
-    """Configure a clean, Apple-like ttk theme on top of 'clam'."""
     style = ttk.Style(root)
     try:
         style.theme_use("clam")
@@ -282,12 +280,19 @@ def apply_mac_theme(root):
 
     style.configure(".", background=MAC_BG, foreground=MAC_TEXT, font=FONT_BODY)
     style.configure("TFrame", background=MAC_BG)
-    style.configure("Card.TFrame", background=MAC_CARD)
 
     style.configure("TLabel", background=MAC_BG, foreground=MAC_TEXT, font=FONT_BODY)
     style.configure("Sub.TLabel", background=MAC_BG, foreground=MAC_TEXT_SUB, font=FONT_SMALL)
-    style.configure("H1.TLabel", background=MAC_BG, foreground=MAC_TEXT, font=FONT_H1)
-    style.configure("H2.TLabel", background=MAC_BG, foreground=MAC_TEXT, font=FONT_H2)
+    style.configure("H1.TLabel", background=MAC_BG, foreground=MAC_ACCENT, font=FONT_H1)
+
+    # Card-context styles (white background)
+    style.configure("Card.TLabel", background=MAC_CARD, foreground=MAC_TEXT, font=FONT_BODY)
+    style.configure("CardTitle.TLabel", background=MAC_CARD, foreground=MAC_ACCENT, font=FONT_BODY_MED)
+    style.configure("CardSub.TLabel", background=MAC_CARD, foreground=MAC_TEXT_SUB, font=FONT_SMALL)
+    style.configure("Card.TCheckbutton", background=MAC_CARD, foreground=MAC_TEXT, font=FONT_BODY)
+    style.map("Card.TCheckbutton", background=[("active", MAC_CARD)])
+    style.configure("Card.TRadiobutton", background=MAC_CARD, foreground=MAC_TEXT, font=FONT_BODY)
+    style.map("Card.TRadiobutton", background=[("active", MAC_CARD)])
 
     style.configure("TEntry", fieldbackground=MAC_CARD, background=MAC_CARD,
                     bordercolor=MAC_BORDER, lightcolor=MAC_BORDER, darkcolor=MAC_BORDER,
@@ -309,29 +314,34 @@ def apply_mac_theme(root):
     style.configure("TRadiobutton", background=MAC_BG, foreground=MAC_TEXT, font=FONT_BODY)
     style.map("TRadiobutton", background=[("active", MAC_BG)])
 
-    style.configure("TLabelframe", background=MAC_BG, bordercolor=MAC_BORDER, relief="solid")
-    style.configure("TLabelframe.Label", background=MAC_BG, foreground=MAC_TEXT_SUB,
-                    font=FONT_BODY_MED)
-
-    style.configure("TNotebook", background=MAC_BG, borderwidth=0, tabmargins=(6, 6, 6, 0))
-    style.configure("TNotebook.Tab", background=MAC_CONTROL_MUTED, foreground=MAC_TEXT_SUB,
-                    padding=(20, 9), font=FONT_BODY_MED, borderwidth=0)
+    style.configure("TNotebook", background=MAC_BG, borderwidth=0, tabmargins=(4, 6, 4, 0))
+    style.configure("TNotebook.Tab", background=MAC_BG, foreground=MAC_TEXT_SUB,
+                    padding=(18, 9), font=FONT_BODY_MED, borderwidth=0)
     style.map("TNotebook.Tab",
-              background=[("selected", MAC_CARD)],
-              foreground=[("selected", MAC_TEXT)])
+              background=[("selected", MAC_BG)],
+              foreground=[("selected", MAC_ACCENT), ("active", MAC_TEXT)])
 
     style.configure("TScrollbar", background=MAC_CONTROL_MUTED, troughcolor=MAC_BG,
                     bordercolor=MAC_BG, arrowcolor=MAC_TEXT_SUB, relief="flat")
     return style
 
 
+def make_card(parent, title):
+    """A white, subtly-bordered card. Build content into the returned .body frame."""
+    c = tk.Frame(parent, bg=MAC_CARD, highlightbackground=MAC_BORDER,
+                 highlightcolor=MAC_BORDER, highlightthickness=1, bd=0)
+    inner = tk.Frame(c, bg=MAC_CARD)
+    inner.pack(fill="both", expand=True, padx=14, pady=12)
+    ttk.Label(inner, text=title, style="CardTitle.TLabel").pack(anchor="w", pady=(0, 8))
+    c.body = inner
+    return c
+
+
 # ----------------------------------------------------------------------------
-# Custom rounded button (shared by both tabs for a consistent Apple look)
+# Custom rounded button (shared for a consistent look)
 # ----------------------------------------------------------------------------
 
 class RoundedButton(tk.Canvas):
-    """Canvas-based button with rounded corners."""
-
     def __init__(self, parent, width, height, text, command=None, radius=8,
                  bg_color=COLOR_BTN_BG, hover_color=COLOR_BTN_HOVER,
                  text_color=COLOR_BTN_TEXT, canvas_bg=COLOR_BG):
@@ -384,8 +394,6 @@ class RoundedButton(tk.Canvas):
 
 
 class CustomOptionMenu(tk.Frame):
-    """Styled option menu with border and arrow."""
-
     def __init__(self, parent, var, options, width=15, command=None):
         super().__init__(parent, bg=COLOR_WHITE, bd=1, relief="solid", highlightthickness=0)
         self.var = var
@@ -433,35 +441,38 @@ class CustomOptionMenu(tk.Frame):
 
 
 # ----------------------------------------------------------------------------
-# Delay widget (fixed or random)
+# Delay widget (fixed or random) - rendered as a card
 # ----------------------------------------------------------------------------
 
 class DelayInput:
     def __init__(self, parent, label, default_fixed="2", default_min="2", default_max="5"):
-        self.frame = ttk.LabelFrame(parent, text=label)
+        self.frame = tk.Frame(parent, bg=MAC_CARD, highlightbackground=MAC_BORDER,
+                              highlightcolor=MAC_BORDER, highlightthickness=1, bd=0)
+        inner = tk.Frame(self.frame, bg=MAC_CARD)
+        inner.pack(fill="both", expand=True, padx=14, pady=12)
+        ttk.Label(inner, text=label, style="CardTitle.TLabel").pack(anchor="w", pady=(0, 8))
+
         self.mode = tk.StringVar(value="fixed")
+        row = tk.Frame(inner, bg=MAC_CARD)
+        row.pack(fill="x")
 
-        row = ttk.Frame(self.frame)
-        row.pack(fill="x", padx=8, pady=6)
-
-        ttk.Radiobutton(row, text="Fixed", variable=self.mode, value="fixed",
-                        command=self._sync).grid(row=0, column=0, sticky="w")
+        ttk.Radiobutton(row, text="Fixed", style="Card.TRadiobutton", variable=self.mode,
+                        value="fixed", command=self._sync).grid(row=0, column=0, sticky="w")
         self.fixed = ttk.Entry(row, width=7)
         self.fixed.insert(0, default_fixed)
-        self.fixed.grid(row=0, column=1, padx=(4, 12))
-        ttk.Label(row, text="sec").grid(row=0, column=2, sticky="w")
+        self.fixed.grid(row=0, column=1, padx=(8, 6))
+        ttk.Label(row, text="sec", style="Card.TLabel").grid(row=0, column=2, sticky="w")
 
-        ttk.Radiobutton(row, text="Random", variable=self.mode, value="random",
-                        command=self._sync).grid(row=0, column=3, sticky="w", padx=(16, 0))
-        ttk.Label(row, text="min").grid(row=0, column=4, padx=(6, 2))
+        ttk.Radiobutton(row, text="Random", style="Card.TRadiobutton", variable=self.mode,
+                        value="random", command=self._sync).grid(row=1, column=0, sticky="w", pady=(8, 0))
         self.rmin = ttk.Entry(row, width=6)
         self.rmin.insert(0, default_min)
-        self.rmin.grid(row=0, column=5)
-        ttk.Label(row, text="max").grid(row=0, column=6, padx=(8, 2))
+        self.rmin.grid(row=1, column=1, padx=(8, 4), pady=(8, 0))
+        ttk.Label(row, text="to", style="Card.TLabel").grid(row=1, column=2, padx=2, pady=(8, 0))
         self.rmax = ttk.Entry(row, width=6)
         self.rmax.insert(0, default_max)
-        self.rmax.grid(row=0, column=7)
-        ttk.Label(row, text="sec").grid(row=0, column=8, padx=(4, 0))
+        self.rmax.grid(row=1, column=3, padx=(4, 4), pady=(8, 0))
+        ttk.Label(row, text="sec", style="Card.TLabel").grid(row=1, column=4, sticky="w", pady=(8, 0))
 
         self._sync()
 
@@ -533,12 +544,10 @@ def _keysym_to_key(event):
 
 
 class KeyRecorder:
-    """One row: a box that records a single key press, plus a remove button."""
-
     PLACEHOLDER = "Click, then press a key"
 
     def __init__(self, parent, on_remove, key=""):
-        self.frame = ttk.Frame(parent)
+        self.frame = tk.Frame(parent, bg=MAC_CARD)
         self.key = key
         self.recording = False
         self.var = tk.StringVar(value=(key if key else self.PLACEHOLDER))
@@ -590,9 +599,10 @@ class KeyRecorder:
 # ----------------------------------------------------------------------------
 
 class ChromeTab:
-    def __init__(self, parent, root, on_done=None):
+    def __init__(self, parent, root, global_save=None, on_done=None):
         self.parent = parent
         self.root = root
+        self.global_save = global_save
         self.on_done = on_done
 
         self.stop_event = threading.Event()
@@ -606,155 +616,138 @@ class ChromeTab:
 
         self._build_ui()
         self._load_settings()
-        self._register_hotkey(self.hotkey_entry.get())
 
-    # ---- UI ----
+    def _card(self, parent, title):
+        return make_card(parent, title)
+
     def _build_ui(self):
-        pad = {"padx": 12, "pady": 5}
-
         outer = tk.Canvas(self.parent, highlightthickness=0, bg=MAC_BG)
         vsb = ttk.Scrollbar(self.parent, orient="vertical", command=outer.yview)
         outer.configure(yscrollcommand=vsb.set)
         vsb.pack(side="right", fill="y")
         outer.pack(side="left", fill="both", expand=True)
         self.scroll_canvas = outer
-        body = ttk.Frame(outer)
+        body = ttk.Frame(outer, padding=(18, 16))
         body_win = outer.create_window((0, 0), window=body, anchor="nw")
         body.bind("<Configure>", lambda e: outer.configure(scrollregion=outer.bbox("all")))
         outer.bind("<Configure>", lambda e: outer.itemconfigure(body_win, width=e.width))
 
-        ttk.Label(body, text="Chrome Sequencer", style="H1.TLabel").pack(anchor="w", padx=12, pady=(12, 2))
+        ttk.Label(body, text="Chrome Sequencer", style="H1.TLabel").pack(anchor="w")
         ttk.Label(body, text="Open Chrome profiles, navigate them, and send keystrokes.",
-                  style="Sub.TLabel").pack(anchor="w", padx=12, pady=(0, 8))
+                  style="Sub.TLabel").pack(anchor="w", pady=(2, 14))
 
-        url_f = ttk.Frame(body)
-        url_f.pack(fill="x", **pad)
-        ttk.Label(url_f, text="URL", width=12).pack(side="left")
-        self.url_entry = ttk.Entry(url_f)
+        # Target card (full width)
+        tgt = self._card(body, "Target")
+        tgt.pack(fill="x", pady=(0, 12))
+        trow1 = tk.Frame(tgt.body, bg=MAC_CARD); trow1.pack(fill="x", pady=(0, 8))
+        ttk.Label(trow1, text="URL", style="Card.TLabel", width=12).pack(side="left")
+        self.url_entry = ttk.Entry(trow1)
         self.url_entry.insert(0, "https://")
         self.url_entry.pack(side="left", fill="x", expand=True, padx=6)
-
-        cx = ttk.Frame(body)
-        cx.pack(fill="x", **pad)
-        ttk.Label(cx, text="Chrome path", width=12).pack(side="left")
-        self.chrome_entry = ttk.Entry(cx)
+        trow2 = tk.Frame(tgt.body, bg=MAC_CARD); trow2.pack(fill="x")
+        ttk.Label(trow2, text="Chrome path", style="Card.TLabel", width=12).pack(side="left")
+        self.chrome_entry = ttk.Entry(trow2)
         self.chrome_entry.insert(0, self.chrome_exe)
         self.chrome_entry.pack(side="left", fill="x", expand=True, padx=6)
-        ttk.Button(cx, text="Browse", width=8, command=self._browse_chrome).pack(side="left")
+        ttk.Button(trow2, text="Browse", width=8, command=self._browse_chrome).pack(side="left")
 
-        # Startup options
-        opt = ttk.LabelFrame(body, text="Startup options")
-        opt.pack(fill="x", padx=12, pady=5)
-        self.run_on_startup = tk.BooleanVar(value=is_run_on_startup())
-        ttk.Checkbutton(opt, text="Launch this app when Windows starts",
-                        variable=self.run_on_startup,
-                        command=self._toggle_startup).pack(anchor="w", padx=8, pady=(6, 0))
-        self.autorun = tk.BooleanVar(value=False)
-        ttk.Checkbutton(opt, text="Run the sequence automatically when the app launches",
-                        variable=self.autorun).pack(anchor="w", padx=8, pady=(0, 6))
+        # Two-column grid
+        grid = ttk.Frame(body)
+        grid.pack(fill="both", expand=True)
+        grid.columnconfigure(0, weight=1, uniform="col")
+        grid.columnconfigure(1, weight=1, uniform="col")
+        left = ttk.Frame(grid); left.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+        right = ttk.Frame(grid); right.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
 
-        # Keys to send per tab
-        kf = ttk.LabelFrame(body, text="6. Keys to send per tab")
-        kf.pack(fill="x", padx=12, pady=5)
-        krow = ttk.Frame(kf)
-        krow.pack(fill="x", padx=8, pady=6)
+        # LEFT column
+        kf = self._card(left, "Keys to send per tab")
+        kf.pack(fill="x", pady=(0, 12))
+        krow = tk.Frame(kf.body, bg=MAC_CARD); krow.pack(fill="x")
         self.send_m = tk.BooleanVar(value=True)
         self.send_c = tk.BooleanVar(value=True)
-        ttk.Checkbutton(krow, text='Send  "m"', variable=self.send_m).pack(side="left", padx=(0, 20))
-        ttk.Checkbutton(krow, text='Send  "c"', variable=self.send_c).pack(side="left", padx=(0, 24))
-        ttk.Label(krow, text="Delay between keys:").pack(side="left")
-        self.key_delay = ttk.Entry(krow, width=6)
+        ttk.Checkbutton(krow, text='Send "m"', style="Card.TCheckbutton", variable=self.send_m).pack(side="left", padx=(0, 18))
+        ttk.Checkbutton(krow, text='Send "c"', style="Card.TCheckbutton", variable=self.send_c).pack(side="left")
+        krow2 = tk.Frame(kf.body, bg=MAC_CARD); krow2.pack(fill="x", pady=(8, 0))
+        ttk.Label(krow2, text="Delay between keys", style="Card.TLabel").pack(side="left")
+        self.key_delay = ttk.Entry(krow2, width=6)
         self.key_delay.insert(0, "0.3")
         self.key_delay.pack(side="left", padx=6)
-        ttk.Label(krow, text="sec").pack(side="left")
+        ttk.Label(krow2, text="sec", style="Card.TLabel").pack(side="left")
 
-        # Hotkey
-        hk = ttk.Frame(body)
-        hk.pack(fill="x", **pad)
-        ttk.Label(hk, text="Abort hotkey", width=12).pack(side="left")
-        self.hotkey_entry = ttk.Entry(hk, width=20)
-        self.hotkey_entry.insert(0, "ctrl+shift+q")
-        self.hotkey_entry.pack(side="left", padx=6)
-        ttk.Button(hk, text="Set", width=6, command=self._apply_hotkey).pack(side="left")
+        self.d_initial = DelayInput(left, "Initial wait", "3", "3", "6")
+        self.d_initial.pack(fill="x", pady=(0, 12))
+        self.d_ext = DelayInput(left, "Wait for extensions / VPN", "10", "8", "15")
+        self.d_ext.pack(fill="x", pady=(0, 12))
+        self.d_afterurl = DelayInput(left, "Wait after opening URLs", "5", "4", "8")
+        self.d_afterurl.pack(fill="x", pady=(0, 12))
+        self.d_pertab = DelayInput(left, "Wait before each tab's keys", "1", "1", "3")
+        self.d_pertab.pack(fill="x", pady=(0, 12))
 
-        # Delays
-        self.d_initial = DelayInput(body, "1. Initial wait", "3", "3", "6")
-        self.d_initial.pack(fill="x", padx=12, pady=5)
-        self.d_ext = DelayInput(body, "3. Wait for extensions / VPN", "10", "8", "15")
-        self.d_ext.pack(fill="x", padx=12, pady=5)
-        self.d_afterurl = DelayInput(body, "5. Wait after opening URLs", "5", "4", "8")
-        self.d_afterurl.pack(fill="x", padx=12, pady=5)
-        self.d_pertab = DelayInput(body, "6. Wait before each tab's keys", "1", "1", "3")
-        self.d_pertab.pack(fill="x", padx=12, pady=5)
-
-        # Profiles
-        pf = ttk.LabelFrame(body, text="2. Chrome profiles (1 window each)")
-        pf.pack(fill="x", padx=12, pady=6)
-        top = ttk.Frame(pf)
-        top.pack(fill="x")
-        ttk.Button(top, text="All", width=6, command=lambda: self._set_all(True)).pack(side="left", padx=2, pady=2)
-        ttk.Button(top, text="None", width=6, command=lambda: self._set_all(False)).pack(side="left", padx=2, pady=2)
-        canvas = tk.Canvas(pf, height=120, highlightthickness=0, bg=MAC_BG)
-        scroll = ttk.Scrollbar(pf, orient="vertical", command=canvas.yview)
-        inner = ttk.Frame(canvas)
-        inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=inner, anchor="nw")
-        canvas.configure(yscrollcommand=scroll.set)
-        canvas.pack(side="left", fill="both", expand=True)
-        scroll.pack(side="right", fill="y")
+        # RIGHT column
+        pf = self._card(right, "Chrome profiles")
+        pf.pack(fill="both", expand=True, pady=(0, 12))
+        ptop = tk.Frame(pf.body, bg=MAC_CARD); ptop.pack(fill="x", pady=(0, 6))
+        ttk.Button(ptop, text="All", width=6, command=lambda: self._set_all(True)).pack(side="left", padx=(0, 4))
+        ttk.Button(ptop, text="None", width=6, command=lambda: self._set_all(False)).pack(side="left")
+        pcanvas = tk.Canvas(pf.body, height=240, highlightthickness=0, bg=MAC_CARD)
+        pscroll = ttk.Scrollbar(pf.body, orient="vertical", command=pcanvas.yview)
+        pinner = tk.Frame(pcanvas, bg=MAC_CARD)
+        pinner.bind("<Configure>", lambda e: pcanvas.configure(scrollregion=pcanvas.bbox("all")))
+        pcanvas.create_window((0, 0), window=pinner, anchor="nw")
+        pcanvas.configure(yscrollcommand=pscroll.set)
+        pcanvas.pack(side="left", fill="both", expand=True)
+        pscroll.pack(side="right", fill="y")
         if not self.profiles:
-            ttk.Label(inner, text="No Chrome profiles found.").pack(anchor="w")
+            ttk.Label(pinner, text="No Chrome profiles found.", style="Card.TLabel").pack(anchor="w")
         for directory, name in self.profiles:
             var = tk.BooleanVar(value=True)
             self.profile_vars[directory] = var
-            ttk.Checkbutton(inner, text=f"{name}   [{directory}]", variable=var).pack(anchor="w")
+            ttk.Checkbutton(pinner, text=f"{name}   [{directory}]", style="Card.TCheckbutton",
+                            variable=var).pack(anchor="w", pady=1)
 
-        # Final key presses
-        fk = ttk.LabelFrame(body, text="7. Final key presses (sent at the end of the sequence)")
-        fk.pack(fill="x", padx=12, pady=5)
-        frow = ttk.Frame(fk)
-        frow.pack(fill="x", padx=8, pady=(6, 2))
+        fk = self._card(right, "Final key presses")
+        fk.pack(fill="x")
+        frow = tk.Frame(fk.body, bg=MAC_CARD); frow.pack(fill="x")
         self.final_keys_enabled = tk.BooleanVar(value=False)
-        ttk.Checkbutton(frow, text="Enable final key presses",
+        ttk.Checkbutton(frow, text="Enable", style="Card.TCheckbutton",
                         variable=self.final_keys_enabled).pack(side="left")
-        ttk.Label(frow, text="Delay between:").pack(side="left", padx=(16, 2))
+        ttk.Label(frow, text="Delay between", style="Card.TLabel").pack(side="left", padx=(16, 2))
         self.final_key_delay = ttk.Entry(frow, width=6)
         self.final_key_delay.insert(0, "0.5")
         self.final_key_delay.pack(side="left")
-        ttk.Label(frow, text="sec").pack(side="left", padx=(2, 0))
-
-        list_area = ttk.Frame(fk)
-        list_area.pack(fill="x", padx=8)
-        fkcanvas = tk.Canvas(list_area, height=90, highlightthickness=0, bg=MAC_BG)
-        fkscroll = ttk.Scrollbar(list_area, orient="vertical", command=fkcanvas.yview)
-        self.final_keys_inner = ttk.Frame(fkcanvas)
+        ttk.Label(frow, text="sec", style="Card.TLabel").pack(side="left", padx=(2, 0))
+        fla = tk.Frame(fk.body, bg=MAC_CARD); fla.pack(fill="x", pady=(6, 0))
+        fkcanvas = tk.Canvas(fla, height=90, highlightthickness=0, bg=MAC_CARD)
+        fkscroll = ttk.Scrollbar(fla, orient="vertical", command=fkcanvas.yview)
+        self.final_keys_inner = tk.Frame(fkcanvas, bg=MAC_CARD)
         self.final_keys_inner.bind(
             "<Configure>", lambda e: fkcanvas.configure(scrollregion=fkcanvas.bbox("all")))
         fkcanvas.create_window((0, 0), window=self.final_keys_inner, anchor="nw")
         fkcanvas.configure(yscrollcommand=fkscroll.set)
         fkcanvas.pack(side="left", fill="x", expand=True)
         fkscroll.pack(side="right", fill="y")
-        ttk.Button(fk, text="+ Add key", command=self._add_final_key).pack(anchor="w", padx=8, pady=(2, 6))
+        ttk.Button(fk.body, text="+ Add key", command=self._add_final_key).pack(anchor="w", pady=(6, 0))
         self.final_key_recorders = []
 
-        ctrl = ttk.Frame(body)
-        ctrl.pack(fill="x", padx=12, pady=8)
-        self.start_btn = RoundedButton(ctrl, 150, 40, "Start", command=self._start, radius=10,
+        # Bottom action bar
+        bar = ttk.Frame(body)
+        bar.pack(fill="x", pady=(14, 0))
+        self.start_btn = RoundedButton(bar, 160, 40, "Start Sequence", command=self._start, radius=10,
                                        bg_color=MAC_ACCENT, hover_color=MAC_ACCENT_HOVER, text_color="#FFFFFF")
         self.start_btn.pack(side="left")
-        RoundedButton(ctrl, 110, 40, "Abort", command=self._abort, radius=10,
+        RoundedButton(bar, 100, 40, "Abort", command=self._abort, radius=10,
                       bg_color=MAC_DANGER, hover_color=MAC_DANGER_HOVER, text_color="#FFFFFF").pack(side="left", padx=8)
+        self.status_label = ttk.Label(bar, text="", style="Sub.TLabel")
+        self.status_label.pack(side="left", padx=12)
+        self.save_btn = RoundedButton(bar, 120, 40, "Save", command=self._save_clicked, radius=10,
+                                      bg_color=MAC_CONTROL_MUTED, hover_color=MAC_CONTROL_HOVER, text_color=MAC_TEXT)
+        self.save_btn.pack(side="right")
 
-        self.log = tk.Text(body, height=6, state="disabled", bg=MAC_CARD, fg=MAC_TEXT,
-                           relief="solid", bd=1, font=FONT_MONO, highlightthickness=0, padx=8, pady=6)
-        self.log.pack(fill="both", expand=False, padx=12, pady=(0, 12))
-
-    # ---- settings persistence ----
+    # ---- settings ----
     def _collect_settings(self):
         return {
             "url": self.url_entry.get(),
             "chrome": self.chrome_entry.get(),
-            "hotkey": self.hotkey_entry.get(),
             "send_m": self.send_m.get(),
             "send_c": self.send_c.get(),
             "key_delay": self.key_delay.get(),
@@ -765,8 +758,6 @@ class ChromeTab:
                 "pertab": self.d_pertab.get_state(),
             },
             "profiles": [d for d, v in self.profile_vars.items() if v.get()],
-            "run_on_startup": self.run_on_startup.get(),
-            "autorun": self.autorun.get(),
             "final_keys_enabled": self.final_keys_enabled.get(),
             "final_key_delay": self.final_key_delay.get(),
             "final_keys": [r.get_key() for r in self.final_key_recorders if r.get_key()],
@@ -780,8 +771,6 @@ class ChromeTab:
             self.url_entry.delete(0, "end"); self.url_entry.insert(0, cfg["url"])
         if cfg.get("chrome"):
             self.chrome_entry.delete(0, "end"); self.chrome_entry.insert(0, cfg["chrome"])
-        if cfg.get("hotkey"):
-            self.hotkey_entry.delete(0, "end"); self.hotkey_entry.insert(0, cfg["hotkey"])
         if "send_m" in cfg:
             self.send_m.set(bool(cfg["send_m"]))
         if "send_c" in cfg:
@@ -797,8 +786,6 @@ class ChromeTab:
             saved = set(cfg["profiles"])
             for directory, var in self.profile_vars.items():
                 var.set(directory in saved)
-        if "autorun" in cfg:
-            self.autorun.set(bool(cfg["autorun"]))
         if "final_keys_enabled" in cfg:
             self.final_keys_enabled.set(bool(cfg["final_keys_enabled"]))
         if "final_key_delay" in cfg:
@@ -807,14 +794,10 @@ class ChromeTab:
         for k in cfg.get("final_keys", []):
             if k:
                 self._add_final_key(k)
-        if "run_on_startup" in cfg:
-            want = bool(cfg["run_on_startup"])
-            if want != is_run_on_startup():
-                set_run_on_startup(want)
-            self.run_on_startup.set(want)
 
-    def _save_settings(self):
-        save_config(self._collect_settings())
+    def _save_clicked(self):
+        if self.global_save:
+            self.global_save()
 
     def _browse_chrome(self):
         p = filedialog.askopenfilename(filetypes=[("chrome.exe", "chrome.exe"), ("Executable", "*.exe")])
@@ -824,17 +807,6 @@ class ChromeTab:
     def _set_all(self, val):
         for v in self.profile_vars.values():
             v.set(val)
-
-    # ---- startup / autorun / final keys ----
-    def _toggle_startup(self):
-        ok = set_run_on_startup(self.run_on_startup.get())
-        if ok:
-            self._log("Windows startup: " +
-                      ("enabled" if self.run_on_startup.get() else "disabled"))
-        else:
-            self._log("Could not update the Windows startup setting.")
-            self.run_on_startup.set(is_run_on_startup())
-        self._save_settings()
 
     def _add_final_key(self, key=""):
         rec = KeyRecorder(self.final_keys_inner, self._remove_final_key, key=key)
@@ -848,20 +820,10 @@ class ChromeTab:
             pass
         rec.destroy()
 
-    def _maybe_autorun(self):
-        if self.autorun.get():
-            self._log("Auto-run enabled: starting sequence shortly...")
-            self.root.after(1200, lambda: self._start(auto=True))
-
     def _log(self, msg):
-        def do():
-            self.log.config(state="normal")
-            self.log.insert("end", msg + "\n")
-            self.log.see("end")
-            self.log.config(state="disabled")
-        self.root.after(0, do)
+        self.root.after(0, lambda: self.status_label.config(text=msg))
 
-    # ---- hotkey ----
+    # ---- hotkey (widget lives on the Application tab; logic stays here) ----
     def _register_hotkey(self, combo):
         if self.hotkey_handle is not None:
             try:
@@ -869,18 +831,15 @@ class ChromeTab:
             except Exception:
                 pass
             self.hotkey_handle = None
+        if not combo:
+            return
         try:
             self.hotkey_handle = keyboard.add_hotkey(combo, self._hotkey_fired)
-            self._log(f"Abort hotkey set: {combo}")
-        except Exception as e:
-            self._log(f"Failed to set hotkey '{combo}': {e}")
-
-    def _apply_hotkey(self):
-        self._register_hotkey(self.hotkey_entry.get().strip().lower())
+        except Exception:
+            pass
 
     def _hotkey_fired(self):
         self.stop_event.set()
-        self._save_settings()
         self._log("Abort hotkey pressed - stopping sequence.")
 
     # ---- run ----
@@ -924,7 +883,8 @@ class ChromeTab:
         final_keys = ([r.get_key() for r in self.final_key_recorders if r.get_key()]
                       if self.final_keys_enabled.get() else [])
 
-        self._save_settings()
+        if self.global_save:
+            self.global_save(flash=False)
         self.stop_event.clear()
         self.start_btn.set_enabled(False)
         self.worker = threading.Thread(
@@ -937,7 +897,6 @@ class ChromeTab:
 
     def _abort(self):
         self.stop_event.set()
-        self._save_settings()
         self._log("Abort requested - stopping sequence.")
 
     def _run_sequence(self, chrome, url, profiles, send_m, send_c, key_delay,
@@ -950,10 +909,10 @@ class ChromeTab:
                 keys.append("c")
 
             s = self.d_initial.seconds()
-            self._log(f"[1] Initial wait {s:.1f}s")
+            self._log(f"Initial wait {s:.1f}s")
             self._sleep(s)
 
-            self._log("[2] Opening Chrome profiles...")
+            self._log("Opening Chrome profiles...")
             profile_hwnds = {}
             for directory in profiles:
                 if self.stop_event.is_set():
@@ -965,16 +924,16 @@ class ChromeTab:
                 hwnd = self._wait_for_new_window(before, timeout=15)
                 if hwnd:
                     profile_hwnds[directory] = hwnd
-                    self._log(f"    opened [{directory}]")
+                    self._log(f"Opened [{directory}]")
                 else:
-                    self._log(f"    WARNING: window not detected for [{directory}]")
+                    self._log(f"WARNING: window not detected for [{directory}]")
                 self._sleep(1.0)
 
             s = self.d_ext.seconds()
-            self._log(f"[3] Wait for extensions / VPN {s:.1f}s")
+            self._log(f"Wait for extensions / VPN {s:.1f}s")
             self._sleep(s)
 
-            self._log("[4] Navigating profiles to URL...")
+            self._log("Navigating profiles to URL...")
             for directory, hwnd in profile_hwnds.items():
                 if self.stop_event.is_set():
                     raise KeyboardInterrupt
@@ -985,19 +944,18 @@ class ChromeTab:
                 keyboard.write(url, delay=0.01)
                 self._sleep(0.1)
                 keyboard.send("enter")
-                self._log(f"    navigated [{directory}]")
+                self._log(f"Navigated [{directory}]")
                 self._sleep(0.5)
 
             s = self.d_afterurl.seconds()
-            self._log(f"[5] Wait after opening URLs {s:.1f}s")
+            self._log(f"Wait after opening URLs {s:.1f}s")
             self._sleep(s)
 
-            self._log(f"[6] Sending keys per tab: {keys or '(none)'}")
+            self._log(f"Sending keys per tab: {keys or '(none)'}")
             for directory, hwnd in profile_hwnds.items():
                 if self.stop_event.is_set():
                     raise KeyboardInterrupt
                 s = self.d_pertab.seconds()
-                self._log(f"    [{directory}] wait {s:.1f}s then send {keys or '(none)'}")
                 self._sleep(s)
                 force_foreground(hwnd)
                 self._sleep(0.3)
@@ -1009,26 +967,23 @@ class ChromeTab:
                         self._sleep(key_delay)
 
             if final_keys:
-                self._log(f"[7] Final key presses: {final_keys}")
+                self._log(f"Final key presses: {final_keys}")
                 self._sleep(1.0)
                 for i, k in enumerate(final_keys):
                     if self.stop_event.is_set():
                         raise KeyboardInterrupt
                     try:
                         keyboard.send(k)
-                        self._log(f"    sent {k}")
                     except Exception as e:
-                        self._log(f"    failed to send {k}: {e}")
+                        self._log(f"failed to send {k}: {e}")
                     if i < len(final_keys) - 1:
                         self._sleep(final_delay)
 
             self._log("Done.")
-            self._save_settings()
             self.root.after(0, self._sequence_finished)
 
         except KeyboardInterrupt:
             self._log("Aborted.")
-            self._save_settings()
             self.root.after(0, lambda: self.start_btn.set_enabled(True))
         except Exception as e:
             self._log(f"Error: {e}")
@@ -1037,7 +992,6 @@ class ChromeTab:
     def _sequence_finished(self):
         self.start_btn.set_enabled(True)
         if self.on_done:
-            self._log("Switching to Typer tab.")
             self.on_done()
 
     def _wait_for_new_window(self, before, timeout=15):
@@ -1053,13 +1007,165 @@ class ChromeTab:
 
 
 # ----------------------------------------------------------------------------
+# TAB 3 - Application (startup, hotkey, updates, config)
+# ----------------------------------------------------------------------------
+
+class ApplicationTab:
+    def __init__(self, parent, root, chrome, global_save=None):
+        self.parent = parent
+        self.root = root
+        self.chrome = chrome
+        self.global_save = global_save
+        self._build_ui()
+        self._load_settings()
+        self._register_hotkey_from_field()
+
+    def _card(self, parent, title):
+        return make_card(parent, title)
+
+    def _build_ui(self):
+        body = ttk.Frame(self.parent, padding=(18, 16))
+        body.pack(fill="both", expand=True)
+
+        ttk.Label(body, text="Application", style="H1.TLabel").pack(anchor="w")
+        ttk.Label(body, text="App-wide settings, abort hotkey, and updates.",
+                  style="Sub.TLabel").pack(anchor="w", pady=(2, 14))
+
+        grid = ttk.Frame(body)
+        grid.pack(fill="x")
+        grid.columnconfigure(0, weight=1, uniform="col")
+        grid.columnconfigure(1, weight=1, uniform="col")
+        left = ttk.Frame(grid); left.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+        right = ttk.Frame(grid); right.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
+
+        # Startup
+        sc = self._card(left, "Startup")
+        sc.pack(fill="x", pady=(0, 12))
+        self.run_on_startup = tk.BooleanVar(value=is_run_on_startup())
+        ttk.Checkbutton(sc.body, text="Launch this app when Windows starts", style="Card.TCheckbutton",
+                        variable=self.run_on_startup, command=self._toggle_startup).pack(anchor="w")
+        self.autorun = tk.BooleanVar(value=False)
+        ttk.Checkbutton(sc.body, text="Run the sequence automatically when the app launches",
+                        style="Card.TCheckbutton", variable=self.autorun).pack(anchor="w", pady=(6, 0))
+
+        # Abort hotkey
+        hc = self._card(left, "Abort hotkey")
+        hc.pack(fill="x", pady=(0, 12))
+        hrow = tk.Frame(hc.body, bg=MAC_CARD); hrow.pack(fill="x")
+        self.hotkey_entry = ttk.Entry(hrow, width=20)
+        self.hotkey_entry.insert(0, "ctrl+shift+q")
+        self.hotkey_entry.pack(side="left")
+        ttk.Button(hrow, text="Set", width=6, command=self._apply_hotkey).pack(side="left", padx=6)
+        ttk.Label(hc.body, text="Stops a running Chrome sequence.",
+                  style="CardSub.TLabel").pack(anchor="w", pady=(6, 0))
+
+        # Updates
+        uc = self._card(right, "Updates")
+        uc.pack(fill="x", pady=(0, 12))
+        ttk.Label(uc.body, text=f"Version {__version__}", style="Card.TLabel").pack(anchor="w")
+        ttk.Button(uc.body, text="Check for updates", command=self._check_updates).pack(anchor="w", pady=(8, 0))
+
+        # Configuration
+        cc = self._card(right, "Configuration")
+        cc.pack(fill="x")
+        crow = tk.Frame(cc.body, bg=MAC_CARD); crow.pack(fill="x")
+        ttk.Button(crow, text="Export", width=10, command=self._export).pack(side="left", padx=(0, 6))
+        ttk.Button(crow, text="Import", width=10, command=self._import).pack(side="left")
+        ttk.Label(cc.body, text="Backup or restore your settings (config.json).",
+                  style="CardSub.TLabel").pack(anchor="w", pady=(6, 0))
+
+        # Save bar
+        bar = ttk.Frame(body)
+        bar.pack(fill="x", pady=(14, 0))
+        self.status_label = ttk.Label(bar, text="", style="Sub.TLabel")
+        self.status_label.pack(side="left")
+        self.save_btn = RoundedButton(bar, 120, 40, "Save", command=self._save_clicked, radius=10,
+                                      bg_color=MAC_CONTROL_MUTED, hover_color=MAC_CONTROL_HOVER, text_color=MAC_TEXT)
+        self.save_btn.pack(side="right")
+
+    def _collect_settings(self):
+        return {
+            "hotkey": self.hotkey_entry.get(),
+            "run_on_startup": self.run_on_startup.get(),
+            "autorun": self.autorun.get(),
+        }
+
+    def _load_settings(self):
+        cfg = load_config()
+        if cfg.get("hotkey"):
+            self.hotkey_entry.delete(0, "end"); self.hotkey_entry.insert(0, cfg["hotkey"])
+        if "autorun" in cfg:
+            self.autorun.set(bool(cfg["autorun"]))
+        if "run_on_startup" in cfg:
+            want = bool(cfg["run_on_startup"])
+            if want != is_run_on_startup():
+                set_run_on_startup(want)
+            self.run_on_startup.set(want)
+
+    def _register_hotkey_from_field(self):
+        self.chrome._register_hotkey(self.hotkey_entry.get().strip().lower())
+
+    def _apply_hotkey(self):
+        combo = self.hotkey_entry.get().strip().lower()
+        self.chrome._register_hotkey(combo)
+        self._flash(f"Hotkey set: {combo}")
+
+    def _toggle_startup(self):
+        ok = set_run_on_startup(self.run_on_startup.get())
+        if ok:
+            self._flash("Startup " + ("enabled" if self.run_on_startup.get() else "disabled"))
+        else:
+            self._flash("Could not update startup setting.")
+            self.run_on_startup.set(is_run_on_startup())
+
+    def _check_updates(self):
+        if not check_for_update():
+            messagebox.showinfo("Up to date", f"You're on the latest version (v{__version__}).")
+            return
+        if run_update_flow(self.root):
+            os._exit(0)
+
+    def _export(self):
+        if self.global_save:
+            self.global_save(flash=False)
+        fn = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("JSON", "*.json")])
+        if fn:
+            try:
+                shutil.copyfile(CONFIG_PATH, fn)
+                self._flash("Exported.")
+            except Exception as e:
+                messagebox.showerror("Export", str(e))
+
+    def _import(self):
+        fn = filedialog.askopenfilename(filetypes=[("JSON", "*.json")])
+        if fn:
+            try:
+                with open(fn, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except Exception as e:
+                messagebox.showerror("Import", f"Not valid JSON: {e}")
+                return
+            save_config(data)
+            messagebox.showinfo("Import", "Imported. Restart the app to apply.")
+
+    def _save_clicked(self):
+        if self.global_save:
+            self.global_save()
+
+    def _flash(self, msg):
+        self.status_label.config(text=msg)
+        self.root.after(2500, lambda: self.status_label.config(text=""))
+
+
+# ----------------------------------------------------------------------------
 # TAB 2 - Typer (adapted from TyperV9)
 # ----------------------------------------------------------------------------
 
 class TyperTab:
-    def __init__(self, parent, root):
+    def __init__(self, parent, root, global_save=None):
         self.parent = parent
         self.root = root
+        self.global_save = global_save
 
         self.current_group_name = None
         self.editor_loaded = False
@@ -1141,6 +1247,10 @@ class TyperTab:
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to save: {e}")
 
+    def persist(self):
+        self._save_editor_to_group()
+        self._save_config()
+
     # --- UI CONSTRUCTION ---
 
     def _setup_ui(self):
@@ -1148,9 +1258,9 @@ class TyperTab:
         self.main_container.pack(fill="both", expand=True, padx=24, pady=16)
 
         top_row = tk.Frame(self.main_container, bg=COLOR_BG)
-        top_row.pack(fill="x", anchor="w", pady=(0, 5))
+        top_row.pack(fill="x", anchor="w", pady=(0, 2))
 
-        tk.Label(top_row, text="Typer", font=FONT_H1, bg=COLOR_BG, fg=COLOR_TEXT_MAIN).pack(side="left", anchor="w")
+        tk.Label(top_row, text="Typer", font=FONT_H1, bg=COLOR_BG, fg=COLOR_ACCENT).pack(side="left", anchor="w")
 
         self.menu_btn = RoundedButton(top_row, 34, 30, "☰", command=self._show_hamburger_menu, radius=8)
         self.menu_btn.pack(side="right", padx=(10, 0))
@@ -1160,14 +1270,14 @@ class TyperTab:
         self.status_btn.pack(side="right", padx=10)
 
         self.hamburger_menu = tk.Menu(self.root, tearoff=0, bg=COLOR_WHITE, font=FONT_MAIN)
-        self.hamburger_menu.add_command(label="Export Config", command=self._export_config)
-        self.hamburger_menu.add_command(label="Import Config", command=self._import_config)
+        self.hamburger_menu.add_command(label="Export Groups", command=self._export_config)
+        self.hamburger_menu.add_command(label="Import Groups", command=self._import_config)
 
         tk.Label(self.main_container, text="Stream-chat message sequencer. Each profile owns a hotkey.",
-                 font=FONT_SUB, bg=COLOR_BG, fg=COLOR_TEXT_SUB).pack(anchor="w", pady=(0, 12))
+                 font=FONT_SUB, bg=COLOR_BG, fg=COLOR_TEXT_SUB).pack(anchor="w", pady=(2, 14))
 
         group_frame = tk.Frame(self.main_container, bg=COLOR_BG)
-        group_frame.pack(fill="x", anchor="w", pady=(0, 25))
+        group_frame.pack(fill="x", anchor="w", pady=(0, 16))
 
         self.group_options = list(self.groups.keys())
         self.group_var = tk.StringVar(self.root)
@@ -1182,20 +1292,21 @@ class TyperTab:
         RoundedButton(group_frame, 80, 30, "Rename", command=self._rename_group, radius=8).pack(side="left", padx=5)
         RoundedButton(group_frame, 70, 30, "Delete", command=self._delete_group, radius=8).pack(side="left", padx=5)
 
-        self.settings_container = tk.Frame(self.main_container, bg=COLOR_BG)
-        self.settings_container.pack(fill="x", anchor="w")
+        # Settings inside a card
+        settings_card = tk.Frame(self.main_container, bg=COLOR_WHITE, highlightbackground=COLOR_BORDER_LIGHT,
+                                 highlightcolor=COLOR_BORDER_LIGHT, highlightthickness=1, bd=0)
+        settings_card.pack(fill="x", anchor="w")
+        self.settings_grid = tk.Frame(settings_card, bg=COLOR_WHITE)
+        self.settings_grid.pack(anchor="w", fill="x", padx=14, pady=12)
 
-        self.settings_grid = tk.Frame(self.settings_container, bg=COLOR_BG)
-        self.settings_grid.pack(anchor="w")
-
-        tk.Frame(self.main_container, height=20, bg=COLOR_BG).pack()
+        tk.Frame(self.main_container, height=16, bg=COLOR_BG).pack()
 
         step_header_frame = tk.Frame(self.main_container, bg=COLOR_BG)
         step_header_frame.pack(fill="x", anchor="w")
-        tk.Label(step_header_frame, text="Message Sequence", font=FONT_TITLE, bg=COLOR_BG, fg=COLOR_TEXT_MAIN).pack(side="left")
+        tk.Label(step_header_frame, text="Message Sequence", font=FONT_TITLE, bg=COLOR_BG, fg=COLOR_ACCENT).pack(side="left")
 
         list_border_frame = tk.Frame(self.main_container, bg=COLOR_BORDER_LIGHT, bd=1)
-        list_border_frame.pack(fill="both", expand=True, pady=(5, 10), anchor="w")
+        list_border_frame.pack(fill="both", expand=True, pady=(6, 10), anchor="w")
 
         self.canvas = tk.Canvas(list_border_frame, bg=COLOR_WHITE, highlightthickness=0)
         self.scrollbar = tk.Scrollbar(list_border_frame, orient="vertical", command=self.canvas.yview)
@@ -1219,24 +1330,24 @@ class TyperTab:
         self.status_label = tk.Label(right_footer, text="Ready", fg=COLOR_TEXT_SUB, bg=COLOR_BG, font=FONT_SUB)
         self.status_label.pack(side="left", padx=15)
 
-        self.save_button = RoundedButton(right_footer, 180, 40, "SAVE & RELOAD", command=self._reload_and_save,
+        self.save_button = RoundedButton(right_footer, 130, 40, "Save", command=self._save_clicked,
                                          radius=10, bg_color=MAC_ACCENT, hover_color=MAC_ACCENT_HOVER, text_color="#FFFFFF")
         self.save_button.pack(side="left")
+
+    def _save_clicked(self):
+        if self.global_save:
+            self.global_save()
 
     def _show_hamburger_menu(self):
         try:
             btn_x = self.menu_btn.winfo_rootx()
             btn_w = self.menu_btn.winfo_width()
             menu_w = 150
-
             x = btn_x - menu_w + btn_w
             y = self.menu_btn.winfo_rooty() + self.menu_btn.winfo_height()
-
             self.hamburger_menu.post(x, y)
         except Exception:
             pass
-
-    # --- Active Macros Monitor Window ---
 
     def _show_active_macros_window(self):
         if self.macro_monitor_window and self.macro_monitor_window.winfo_exists():
@@ -1304,36 +1415,36 @@ class TyperTab:
         self.shift_var = tk.BooleanVar(value='shift' in parts)
         base_key = next((p for p in parts if p not in ['ctrl', 'shift', 'alt', 'lcontrol', 'rcontrol', 'lshift', 'rshift', 'lalt', 'ralt', 'alt gr', '']), '')
 
-        tk.Label(self.settings_grid, text="Hotkey Base:", font=FONT_MAIN, bg=COLOR_BG, fg=COLOR_TEXT_SUB).grid(row=0, column=0, sticky="w", padx=15, pady=5)
+        tk.Label(self.settings_grid, text="Hotkey Base:", font=FONT_MAIN, bg=COLOR_WHITE, fg=COLOR_TEXT_SUB).grid(row=0, column=0, sticky="w", padx=(0, 15), pady=5)
 
         self.editor_hotkey_label = tk.Label(self.settings_grid, text=base_key, font=(FONT_FAMILY, 11, "bold"),
                                           bg="#FFF3CD", fg="#856404", width=12, relief="flat", pady=5)
         self.editor_hotkey_label.grid(row=0, column=1, sticky="w", pady=5)
         self.editor_hotkey_label.bind("<Button-1>", self._start_hotkey_capture)
 
-        tk.Label(self.settings_grid, text="Modifiers:", font=FONT_MAIN, bg=COLOR_BG, fg=COLOR_TEXT_SUB).grid(row=1, column=0, sticky="w", padx=15, pady=5)
-        mod_frame = tk.Frame(self.settings_grid, bg=COLOR_BG)
+        tk.Label(self.settings_grid, text="Modifiers:", font=FONT_MAIN, bg=COLOR_WHITE, fg=COLOR_TEXT_SUB).grid(row=1, column=0, sticky="w", padx=(0, 15), pady=5)
+        mod_frame = tk.Frame(self.settings_grid, bg=COLOR_WHITE)
         mod_frame.grid(row=1, column=1, sticky="w")
-        tk.Checkbutton(mod_frame, text="Ctrl", variable=self.ctrl_var, bg=COLOR_BG, activebackground=COLOR_BG).pack(side="left", padx=(0, 10))
-        tk.Checkbutton(mod_frame, text="Shift", variable=self.shift_var, bg=COLOR_BG, activebackground=COLOR_BG).pack(side="left")
+        tk.Checkbutton(mod_frame, text="Ctrl", variable=self.ctrl_var, bg=COLOR_WHITE, activebackground=COLOR_WHITE).pack(side="left", padx=(0, 10))
+        tk.Checkbutton(mod_frame, text="Shift", variable=self.shift_var, bg=COLOR_WHITE, activebackground=COLOR_WHITE).pack(side="left")
 
-        tk.Label(self.settings_grid, text="Switch Key:", font=FONT_MAIN, bg=COLOR_BG, fg=COLOR_TEXT_SUB).grid(row=2, column=0, sticky="w", padx=15, pady=10)
+        tk.Label(self.settings_grid, text="Switch Key:", font=FONT_MAIN, bg=COLOR_WHITE, fg=COLOR_TEXT_SUB).grid(row=2, column=0, sticky="w", padx=(0, 15), pady=10)
         self.switch_key_var = tk.StringVar(value=data.get('switch_key', 'alt+esc'))
         switch_menu = CustomOptionMenu(self.settings_grid, self.switch_key_var, ["alt+tab", "alt+esc"], width=15)
         switch_menu.grid(row=2, column=1, sticky="w")
 
-        tk.Label(self.settings_grid, text="Loop Settings:", font=FONT_MAIN, bg=COLOR_BG, fg=COLOR_TEXT_SUB).grid(row=3, column=0, sticky="w", padx=15, pady=5)
+        tk.Label(self.settings_grid, text="Loop Settings:", font=FONT_MAIN, bg=COLOR_WHITE, fg=COLOR_TEXT_SUB).grid(row=3, column=0, sticky="w", padx=(0, 15), pady=5)
         self.loop_enabled_var = tk.BooleanVar(value=data.get('loop_enabled', False))
-        tk.Checkbutton(self.settings_grid, text="Loop", variable=self.loop_enabled_var, bg=COLOR_BG, activebackground=COLOR_BG).grid(row=3, column=1, sticky="w")
+        tk.Checkbutton(self.settings_grid, text="Loop", variable=self.loop_enabled_var, bg=COLOR_WHITE, activebackground=COLOR_WHITE).grid(row=3, column=1, sticky="w")
 
-        tk.Label(self.settings_grid, text="Loop Count:", font=FONT_MAIN, bg=COLOR_BG, fg=COLOR_TEXT_SUB).grid(row=4, column=0, sticky="w", padx=15, pady=5)
-        count_frame = tk.Frame(self.settings_grid, bg=COLOR_BG)
+        tk.Label(self.settings_grid, text="Loop Count:", font=FONT_MAIN, bg=COLOR_WHITE, fg=COLOR_TEXT_SUB).grid(row=4, column=0, sticky="w", padx=(0, 15), pady=5)
+        count_frame = tk.Frame(self.settings_grid, bg=COLOR_WHITE)
         count_frame.grid(row=4, column=1, sticky="w")
 
         self.loop_count_var = tk.Entry(count_frame, width=6, relief="solid", bd=1)
         self.loop_count_var.insert(0, str(data.get('loop_count', 0)))
         self.loop_count_var.pack(side="left")
-        tk.Label(count_frame, text="(0 = Infinite)", font=FONT_SUB, bg=COLOR_BG, fg="#888").pack(side="left", padx=5)
+        tk.Label(count_frame, text="(0 = Infinite)", font=FONT_SUB, bg=COLOR_WHITE, fg="#888").pack(side="left", padx=5)
 
         self.editor_step_entries = []
         for i, step in enumerate(data['steps']):
@@ -1397,9 +1508,6 @@ class TyperTab:
     def _reindex_rows(self):
         for i, entry in enumerate(self.editor_step_entries):
             entry["frame"].winfo_children()[0].config(text=f"{i + 1}.")
-
-    def scroll_wheel(self, event):
-        self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
 
     # --- Group Management ---
 
@@ -1475,12 +1583,10 @@ class TyperTab:
             self.groups = self._load_config()
 
             if not self.groups:
-                messagebox.showerror("Import Failed", "The imported file was read, but the data structure is invalid or empty. Please check the file contents.")
-
+                messagebox.showerror("Import Failed", "The imported file was read, but the data structure is invalid or empty.")
                 self.groups = self._load_config()
                 if not self.groups:
                     self._create_default_group()
-
                 self.current_group_name = next(iter(self.groups)) if self.groups else None
                 self._update_dropdown()
                 self.group_var.set(self.current_group_name)
@@ -1490,13 +1596,11 @@ class TyperTab:
 
             self._save_config()
             self._update_dropdown()
-
             first_group_name = next(iter(self.groups))
             self.group_var.set(first_group_name)
             self.current_group_name = first_group_name
             self._load_group_to_editor()
             self._setup_all_hotkeys()
-
             messagebox.showinfo("Success", "Configuration imported and active.")
 
     def _save_editor_to_group(self):
@@ -1534,19 +1638,6 @@ class TyperTab:
 
     # --- Hotkey and Execution ---
 
-    def _reload_and_save(self):
-        self.save_button.itemconfig(self.save_button.text_id, text="SAVING...")
-        self.status_label.config(text="Updating...", fg="orange")
-        threading.Thread(target=self._reload_thread, daemon=True).start()
-
-    def _reload_thread(self):
-        time.sleep(0.5)
-        self._save_editor_to_group()
-        self._save_config()
-        self._setup_all_hotkeys()
-        self.root.after(0, lambda: self.status_label.config(text="Saved & Active", fg="green"))
-        self.root.after(0, lambda: self.save_button.itemconfig(self.save_button.text_id, text="SAVE & RELOAD"))
-
     def _start_hotkey_capture(self, e):
         self.editor_hotkey_label.config(text="...", bg="#FFCCCC")
         self.editor_hotkey_label.unbind("<Button-1>")
@@ -1567,8 +1658,6 @@ class TyperTab:
 
     def _setup_all_hotkeys(self):
         with self.hotkey_lock:
-            # Remove only the hotkeys WE registered (don't touch the Chrome tab's
-            # abort hotkey or anything else registered globally).
             for h in self._hotkey_handles:
                 try:
                     keyboard.remove_hotkey(h)
@@ -1660,10 +1749,6 @@ class TyperTab:
             return float(d)
         except: return 1.5
 
-    def save_all(self):
-        self._save_editor_to_group()
-        self._save_config()
-
 
 # ----------------------------------------------------------------------------
 # Combined tabbed application shell
@@ -1673,8 +1758,8 @@ class CombinedApp:
     def __init__(self, root):
         self.root = root
         root.title(f"Stream Suite v{__version__}")
-        root.geometry("1040x880")
-        root.minsize(760, 620)
+        root.geometry("1060x900")
+        root.minsize(820, 640)
         self.style = apply_mac_theme(root)
 
         container = ttk.Frame(root)
@@ -1685,17 +1770,20 @@ class CombinedApp:
 
         self.chrome_frame = ttk.Frame(self.notebook)
         self.typer_frame = ttk.Frame(self.notebook)
+        self.app_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.chrome_frame, text="  Chrome Sequencer  ")
         self.notebook.add(self.typer_frame, text="  Typer  ")
+        self.notebook.add(self.app_frame, text="  Application  ")
 
-        self.chrome = ChromeTab(self.chrome_frame, root, on_done=self._focus_typer)
-        self.typer = TyperTab(self.typer_frame, root)
+        self.chrome = ChromeTab(self.chrome_frame, root, global_save=self.save_all, on_done=self._focus_typer)
+        self.typer = TyperTab(self.typer_frame, root, global_save=self.save_all)
+        self.app = ApplicationTab(self.app_frame, root, self.chrome, global_save=self.save_all)
 
-        # Route the mouse wheel to whichever tab is active (avoids bind_all clashes).
         root.bind_all("<MouseWheel>", self._on_wheel)
-
         root.protocol("WM_DELETE_WINDOW", self._on_close)
-        self.chrome._maybe_autorun()
+
+        if self.app.autorun.get():
+            root.after(1200, lambda: self.chrome._start(auto=True))
 
     def _focus_typer(self):
         try:
@@ -1713,13 +1801,45 @@ class CombinedApp:
         elif idx == 1 and getattr(self.typer, "canvas", None) is not None:
             self.typer.canvas.yview_scroll(int(-event.delta / 120), "units")
 
-    def _on_close(self):
+    def save_all(self, flash=True):
+        cfg = {}
+        cfg.update(self.chrome._collect_settings())
+        cfg.update(self.app._collect_settings())
+        save_config(cfg)
         try:
-            self.chrome._save_settings()
+            self.typer.persist()
+            self.typer._setup_all_hotkeys()
         except Exception:
             pass
+        if flash:
+            self._flash_saved()
+
+    def _flash_saved(self):
+        for lbl in (self.chrome.status_label, self.app.status_label):
+            try:
+                lbl.config(text="Saved ✓")
+            except Exception:
+                pass
         try:
-            self.typer.save_all()
+            self.typer.status_label.config(text="Saved ✓", fg=MAC_SUCCESS)
+        except Exception:
+            pass
+        self.root.after(1800, self._clear_saved)
+
+    def _clear_saved(self):
+        for lbl in (self.chrome.status_label, self.app.status_label):
+            try:
+                lbl.config(text="")
+            except Exception:
+                pass
+        try:
+            self.typer.status_label.config(text="Ready", fg=COLOR_TEXT_SUB)
+        except Exception:
+            pass
+
+    def _on_close(self):
+        try:
+            self.save_all(flash=False)
         except Exception:
             pass
         try:
