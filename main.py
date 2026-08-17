@@ -38,6 +38,7 @@ import threading
 import subprocess
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, simpledialog
+from tkinter import font as tkfont
 
 import keyboard
 import win32gui
@@ -326,15 +327,90 @@ def apply_mac_theme(root):
     return style
 
 
+def _round_points(x1, y1, x2, y2, r):
+    return [x1 + r, y1, x1 + r, y1, x2 - r, y1, x2 - r, y1, x2, y1, x2, y1 + r, x2, y1 + r,
+            x2, y2 - r, x2, y2 - r, x2, y2, x2 - r, y2, x2 - r, y2, x1 + r, y2, x1 + r, y2,
+            x1, y2, x1, y2 - r, x1, y2 - r, x1, y1 + r, x1, y1 + r, x1, y1]
+
+
 def make_card(parent, title):
-    """A white, subtly-bordered card. Build content into the returned .body frame."""
+    """A white, thin-bordered card. Build content into the returned .body frame."""
     c = tk.Frame(parent, bg=MAC_CARD, highlightbackground=MAC_BORDER,
                  highlightcolor=MAC_BORDER, highlightthickness=1, bd=0)
     inner = tk.Frame(c, bg=MAC_CARD)
-    inner.pack(fill="both", expand=True, padx=14, pady=12)
-    ttk.Label(inner, text=title, style="CardTitle.TLabel").pack(anchor="w", pady=(0, 8))
+    inner.pack(fill="both", expand=True, padx=12, pady=9)
+    ttk.Label(inner, text=title, style="CardTitle.TLabel").pack(anchor="w", pady=(0, 6))
     c.body = inner
     return c
+
+
+class MiniScrollbar(tk.Canvas):
+    """Thin, rounded, teal scrollbar (no arrows, no track)."""
+
+    def __init__(self, parent, command, width=8, bg=MAC_BG):
+        super().__init__(parent, width=width, bg=bg, highlightthickness=0, bd=0)
+        self.command = command
+        self.first, self.last = 0.0, 1.0
+        self._thick = width
+        self.bind("<Configure>", lambda e: self._redraw())
+        self.bind("<Button-1>", self._jump)
+        self.bind("<B1-Motion>", self._jump)
+
+    def set(self, first, last):
+        self.first, self.last = float(first), float(last)
+        self._redraw()
+
+    def _redraw(self):
+        self.delete("thumb")
+        if self.first <= 0.0 and self.last >= 1.0:
+            return  # content fits; no thumb
+        h = self.winfo_height()
+        if h <= 1:
+            return
+        y1 = self.first * h + 1
+        y2 = self.last * h - 1
+        w = self._thick
+        r = (w - 3) / 2
+        self.create_polygon(_round_points(2, y1, w - 1, y2, r), fill=MAC_ACCENT,
+                            outline="", smooth=True, tags="thumb")
+
+    def _jump(self, e):
+        h = self.winfo_height() or 1
+        span = self.last - self.first
+        if span >= 1.0:
+            return
+        frac = max(0.0, min(1.0 - span, e.y / h - span / 2))
+        self.command("moveto", frac)
+
+
+class PillTab(tk.Canvas):
+    """A rounded, detached tab 'pill' that fills teal when selected."""
+
+    def __init__(self, parent, text, command):
+        f = tkfont.Font(family=FONT_FAMILY, size=10, weight="bold")
+        w = f.measure(text) + 36
+        super().__init__(parent, width=w, height=34, bg=MAC_BG, highlightthickness=0, bd=0)
+        self.command = command
+        self.selected = False
+        self.rect = self.create_polygon(_round_points(2, 2, w - 2, 32, 15), fill=MAC_BG,
+                                        outline="", smooth=True)
+        self.tid = self.create_text(w / 2, 18, text=text, fill=MAC_TEXT_SUB, font=f)
+        self.bind("<Button-1>", lambda e: self.command())
+        self.bind("<Enter>", self._hover)
+        self.bind("<Leave>", self._leave)
+
+    def set_selected(self, sel):
+        self.selected = sel
+        self.itemconfig(self.rect, fill=MAC_ACCENT if sel else MAC_BG)
+        self.itemconfig(self.tid, fill="#FFFFFF" if sel else MAC_TEXT_SUB)
+
+    def _hover(self, e):
+        if not self.selected:
+            self.itemconfig(self.rect, fill=MAC_CONTROL_MUTED)
+
+    def _leave(self, e):
+        if not self.selected:
+            self.itemconfig(self.rect, fill=MAC_BG)
 
 
 # ----------------------------------------------------------------------------
@@ -445,12 +521,14 @@ class CustomOptionMenu(tk.Frame):
 # ----------------------------------------------------------------------------
 
 class DelayInput:
+    """Compact single-row delay control inside a bordered card."""
+
     def __init__(self, parent, label, default_fixed="2", default_min="2", default_max="5"):
         self.frame = tk.Frame(parent, bg=MAC_CARD, highlightbackground=MAC_BORDER,
                               highlightcolor=MAC_BORDER, highlightthickness=1, bd=0)
         inner = tk.Frame(self.frame, bg=MAC_CARD)
-        inner.pack(fill="both", expand=True, padx=14, pady=12)
-        ttk.Label(inner, text=label, style="CardTitle.TLabel").pack(anchor="w", pady=(0, 8))
+        inner.pack(fill="both", expand=True, padx=12, pady=8)
+        ttk.Label(inner, text=label, style="CardTitle.TLabel").pack(anchor="w", pady=(0, 4))
 
         self.mode = tk.StringVar(value="fixed")
         row = tk.Frame(inner, bg=MAC_CARD)
@@ -458,21 +536,21 @@ class DelayInput:
 
         ttk.Radiobutton(row, text="Fixed", style="Card.TRadiobutton", variable=self.mode,
                         value="fixed", command=self._sync).grid(row=0, column=0, sticky="w")
-        self.fixed = ttk.Entry(row, width=7)
+        self.fixed = ttk.Entry(row, width=5)
         self.fixed.insert(0, default_fixed)
-        self.fixed.grid(row=0, column=1, padx=(8, 6))
-        ttk.Label(row, text="sec", style="Card.TLabel").grid(row=0, column=2, sticky="w")
+        self.fixed.grid(row=0, column=1, padx=(6, 3))
+        ttk.Label(row, text="sec", style="CardSub.TLabel").grid(row=0, column=2, sticky="w")
 
         ttk.Radiobutton(row, text="Random", style="Card.TRadiobutton", variable=self.mode,
-                        value="random", command=self._sync).grid(row=1, column=0, sticky="w", pady=(8, 0))
-        self.rmin = ttk.Entry(row, width=6)
+                        value="random", command=self._sync).grid(row=0, column=3, sticky="w", padx=(16, 0))
+        self.rmin = ttk.Entry(row, width=5)
         self.rmin.insert(0, default_min)
-        self.rmin.grid(row=1, column=1, padx=(8, 4), pady=(8, 0))
-        ttk.Label(row, text="to", style="Card.TLabel").grid(row=1, column=2, padx=2, pady=(8, 0))
-        self.rmax = ttk.Entry(row, width=6)
+        self.rmin.grid(row=0, column=4, padx=(6, 2))
+        ttk.Label(row, text="to", style="CardSub.TLabel").grid(row=0, column=5)
+        self.rmax = ttk.Entry(row, width=5)
         self.rmax.insert(0, default_max)
-        self.rmax.grid(row=1, column=3, padx=(4, 4), pady=(8, 0))
-        ttk.Label(row, text="sec", style="Card.TLabel").grid(row=1, column=4, sticky="w", pady=(8, 0))
+        self.rmax.grid(row=0, column=6, padx=(2, 3))
+        ttk.Label(row, text="sec", style="CardSub.TLabel").grid(row=0, column=7, sticky="w")
 
         self._sync()
 
@@ -622,30 +700,30 @@ class ChromeTab:
 
     def _build_ui(self):
         outer = tk.Canvas(self.parent, highlightthickness=0, bg=MAC_BG)
-        vsb = ttk.Scrollbar(self.parent, orient="vertical", command=outer.yview)
+        vsb = MiniScrollbar(self.parent, command=outer.yview, bg=MAC_BG)
         outer.configure(yscrollcommand=vsb.set)
-        vsb.pack(side="right", fill="y")
+        vsb.pack(side="right", fill="y", padx=(2, 0))
         outer.pack(side="left", fill="both", expand=True)
         self.scroll_canvas = outer
-        body = ttk.Frame(outer, padding=(18, 16))
+        body = ttk.Frame(outer, padding=(14, 10))
         body_win = outer.create_window((0, 0), window=body, anchor="nw")
         body.bind("<Configure>", lambda e: outer.configure(scrollregion=outer.bbox("all")))
         outer.bind("<Configure>", lambda e: outer.itemconfigure(body_win, width=e.width))
 
         ttk.Label(body, text="Chrome Sequencer", style="H1.TLabel").pack(anchor="w")
         ttk.Label(body, text="Open Chrome profiles, navigate them, and send keystrokes.",
-                  style="Sub.TLabel").pack(anchor="w", pady=(2, 14))
+                  style="Sub.TLabel").pack(anchor="w", pady=(1, 10))
 
         # Target card (full width)
         tgt = self._card(body, "Target")
-        tgt.pack(fill="x", pady=(0, 12))
-        trow1 = tk.Frame(tgt.body, bg=MAC_CARD); trow1.pack(fill="x", pady=(0, 8))
-        ttk.Label(trow1, text="URL", style="Card.TLabel", width=12).pack(side="left")
+        tgt.pack(fill="x", pady=(0, 8))
+        trow1 = tk.Frame(tgt.body, bg=MAC_CARD); trow1.pack(fill="x", pady=(0, 6))
+        ttk.Label(trow1, text="URL", style="Card.TLabel", width=11).pack(side="left")
         self.url_entry = ttk.Entry(trow1)
         self.url_entry.insert(0, "https://")
         self.url_entry.pack(side="left", fill="x", expand=True, padx=6)
         trow2 = tk.Frame(tgt.body, bg=MAC_CARD); trow2.pack(fill="x")
-        ttk.Label(trow2, text="Chrome path", style="Card.TLabel", width=12).pack(side="left")
+        ttk.Label(trow2, text="Chrome path", style="Card.TLabel", width=11).pack(side="left")
         self.chrome_entry = ttk.Entry(trow2)
         self.chrome_entry.insert(0, self.chrome_exe)
         self.chrome_entry.pack(side="left", fill="x", expand=True, padx=6)
@@ -656,54 +734,54 @@ class ChromeTab:
         grid.pack(fill="both", expand=True)
         grid.columnconfigure(0, weight=1, uniform="col")
         grid.columnconfigure(1, weight=1, uniform="col")
-        left = ttk.Frame(grid); left.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
-        right = ttk.Frame(grid); right.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
+        left = ttk.Frame(grid); left.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
+        right = ttk.Frame(grid); right.grid(row=0, column=1, sticky="nsew", padx=(5, 0))
 
-        # LEFT column
+        # LEFT column - compact single-row cards
         kf = self._card(left, "Keys to send per tab")
-        kf.pack(fill="x", pady=(0, 12))
+        kf.pack(fill="x", pady=(0, 8))
         krow = tk.Frame(kf.body, bg=MAC_CARD); krow.pack(fill="x")
         self.send_m = tk.BooleanVar(value=True)
         self.send_c = tk.BooleanVar(value=True)
-        ttk.Checkbutton(krow, text='Send "m"', style="Card.TCheckbutton", variable=self.send_m).pack(side="left", padx=(0, 18))
-        ttk.Checkbutton(krow, text='Send "c"', style="Card.TCheckbutton", variable=self.send_c).pack(side="left")
-        krow2 = tk.Frame(kf.body, bg=MAC_CARD); krow2.pack(fill="x", pady=(8, 0))
-        ttk.Label(krow2, text="Delay between keys", style="Card.TLabel").pack(side="left")
-        self.key_delay = ttk.Entry(krow2, width=6)
+        ttk.Checkbutton(krow, text='"m"', style="Card.TCheckbutton", variable=self.send_m).pack(side="left", padx=(0, 12))
+        ttk.Checkbutton(krow, text='"c"', style="Card.TCheckbutton", variable=self.send_c).pack(side="left", padx=(0, 16))
+        ttk.Label(krow, text="Delay", style="CardSub.TLabel").pack(side="left")
+        self.key_delay = ttk.Entry(krow, width=5)
         self.key_delay.insert(0, "0.3")
-        self.key_delay.pack(side="left", padx=6)
-        ttk.Label(krow2, text="sec", style="Card.TLabel").pack(side="left")
+        self.key_delay.pack(side="left", padx=5)
+        ttk.Label(krow, text="sec", style="CardSub.TLabel").pack(side="left")
 
         self.d_initial = DelayInput(left, "Initial wait", "3", "3", "6")
-        self.d_initial.pack(fill="x", pady=(0, 12))
+        self.d_initial.pack(fill="x", pady=(0, 8))
         self.d_ext = DelayInput(left, "Wait for extensions / VPN", "10", "8", "15")
-        self.d_ext.pack(fill="x", pady=(0, 12))
+        self.d_ext.pack(fill="x", pady=(0, 8))
         self.d_afterurl = DelayInput(left, "Wait after opening URLs", "5", "4", "8")
-        self.d_afterurl.pack(fill="x", pady=(0, 12))
+        self.d_afterurl.pack(fill="x", pady=(0, 8))
         self.d_pertab = DelayInput(left, "Wait before each tab's keys", "1", "1", "3")
-        self.d_pertab.pack(fill="x", pady=(0, 12))
+        self.d_pertab.pack(fill="x", pady=(0, 8))
 
         # RIGHT column
         pf = self._card(right, "Chrome profiles")
-        pf.pack(fill="both", expand=True, pady=(0, 12))
-        ptop = tk.Frame(pf.body, bg=MAC_CARD); ptop.pack(fill="x", pady=(0, 6))
+        pf.pack(fill="both", expand=True, pady=(0, 8))
+        ptop = tk.Frame(pf.body, bg=MAC_CARD); ptop.pack(fill="x", pady=(0, 4))
         ttk.Button(ptop, text="All", width=6, command=lambda: self._set_all(True)).pack(side="left", padx=(0, 4))
         ttk.Button(ptop, text="None", width=6, command=lambda: self._set_all(False)).pack(side="left")
-        pcanvas = tk.Canvas(pf.body, height=240, highlightthickness=0, bg=MAC_CARD)
-        pscroll = ttk.Scrollbar(pf.body, orient="vertical", command=pcanvas.yview)
+        pwrap = tk.Frame(pf.body, bg=MAC_CARD); pwrap.pack(fill="both", expand=True)
+        pcanvas = tk.Canvas(pwrap, height=190, highlightthickness=0, bg=MAC_CARD)
+        pscroll = MiniScrollbar(pwrap, command=pcanvas.yview, bg=MAC_CARD)
         pinner = tk.Frame(pcanvas, bg=MAC_CARD)
         pinner.bind("<Configure>", lambda e: pcanvas.configure(scrollregion=pcanvas.bbox("all")))
         pcanvas.create_window((0, 0), window=pinner, anchor="nw")
         pcanvas.configure(yscrollcommand=pscroll.set)
         pcanvas.pack(side="left", fill="both", expand=True)
-        pscroll.pack(side="right", fill="y")
+        pscroll.pack(side="right", fill="y", padx=(2, 0))
         if not self.profiles:
             ttk.Label(pinner, text="No Chrome profiles found.", style="Card.TLabel").pack(anchor="w")
         for directory, name in self.profiles:
             var = tk.BooleanVar(value=True)
             self.profile_vars[directory] = var
             ttk.Checkbutton(pinner, text=f"{name}   [{directory}]", style="Card.TCheckbutton",
-                            variable=var).pack(anchor="w", pady=1)
+                            variable=var).pack(anchor="w")
 
         fk = self._card(right, "Final key presses")
         fk.pack(fill="x")
@@ -711,35 +789,35 @@ class ChromeTab:
         self.final_keys_enabled = tk.BooleanVar(value=False)
         ttk.Checkbutton(frow, text="Enable", style="Card.TCheckbutton",
                         variable=self.final_keys_enabled).pack(side="left")
-        ttk.Label(frow, text="Delay between", style="Card.TLabel").pack(side="left", padx=(16, 2))
-        self.final_key_delay = ttk.Entry(frow, width=6)
+        ttk.Label(frow, text="Delay", style="CardSub.TLabel").pack(side="left", padx=(14, 2))
+        self.final_key_delay = ttk.Entry(frow, width=5)
         self.final_key_delay.insert(0, "0.5")
         self.final_key_delay.pack(side="left")
-        ttk.Label(frow, text="sec", style="Card.TLabel").pack(side="left", padx=(2, 0))
+        ttk.Label(frow, text="sec", style="CardSub.TLabel").pack(side="left", padx=(2, 0))
         fla = tk.Frame(fk.body, bg=MAC_CARD); fla.pack(fill="x", pady=(6, 0))
-        fkcanvas = tk.Canvas(fla, height=90, highlightthickness=0, bg=MAC_CARD)
-        fkscroll = ttk.Scrollbar(fla, orient="vertical", command=fkcanvas.yview)
+        fkcanvas = tk.Canvas(fla, height=76, highlightthickness=0, bg=MAC_CARD)
+        fkscroll = MiniScrollbar(fla, command=fkcanvas.yview, bg=MAC_CARD)
         self.final_keys_inner = tk.Frame(fkcanvas, bg=MAC_CARD)
         self.final_keys_inner.bind(
             "<Configure>", lambda e: fkcanvas.configure(scrollregion=fkcanvas.bbox("all")))
         fkcanvas.create_window((0, 0), window=self.final_keys_inner, anchor="nw")
         fkcanvas.configure(yscrollcommand=fkscroll.set)
         fkcanvas.pack(side="left", fill="x", expand=True)
-        fkscroll.pack(side="right", fill="y")
+        fkscroll.pack(side="right", fill="y", padx=(2, 0))
         ttk.Button(fk.body, text="+ Add key", command=self._add_final_key).pack(anchor="w", pady=(6, 0))
         self.final_key_recorders = []
 
         # Bottom action bar
         bar = ttk.Frame(body)
-        bar.pack(fill="x", pady=(14, 0))
-        self.start_btn = RoundedButton(bar, 160, 40, "Start Sequence", command=self._start, radius=10,
+        bar.pack(fill="x", pady=(12, 0))
+        self.start_btn = RoundedButton(bar, 150, 38, "Start Sequence", command=self._start, radius=10,
                                        bg_color=MAC_ACCENT, hover_color=MAC_ACCENT_HOVER, text_color="#FFFFFF")
         self.start_btn.pack(side="left")
-        RoundedButton(bar, 100, 40, "Abort", command=self._abort, radius=10,
+        RoundedButton(bar, 90, 38, "Abort", command=self._abort, radius=10,
                       bg_color=MAC_DANGER, hover_color=MAC_DANGER_HOVER, text_color="#FFFFFF").pack(side="left", padx=8)
         self.status_label = ttk.Label(bar, text="", style="Sub.TLabel")
         self.status_label.pack(side="left", padx=12)
-        self.save_btn = RoundedButton(bar, 120, 40, "Save", command=self._save_clicked, radius=10,
+        self.save_btn = RoundedButton(bar, 110, 38, "Save", command=self._save_clicked, radius=10,
                                       bg_color=MAC_CONTROL_MUTED, hover_color=MAC_CONTROL_HOVER, text_color=MAC_TEXT)
         self.save_btn.pack(side="right")
 
@@ -1309,7 +1387,7 @@ class TyperTab:
         list_border_frame.pack(fill="both", expand=True, pady=(6, 10), anchor="w")
 
         self.canvas = tk.Canvas(list_border_frame, bg=COLOR_WHITE, highlightthickness=0)
-        self.scrollbar = tk.Scrollbar(list_border_frame, orient="vertical", command=self.canvas.yview)
+        self.scrollbar = MiniScrollbar(list_border_frame, command=self.canvas.yview, bg=COLOR_WHITE)
         self.scrollable_frame = tk.Frame(self.canvas, bg=COLOR_WHITE)
 
         self.scrollable_frame.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
@@ -1317,7 +1395,7 @@ class TyperTab:
         self.canvas.configure(yscrollcommand=self.scrollbar.set)
 
         self.canvas.pack(side="left", fill="both", expand=True)
-        self.scrollbar.pack(side="right", fill="y")
+        self.scrollbar.pack(side="right", fill="y", padx=(2, 0))
 
         footer_frame = tk.Frame(self.main_container, bg=COLOR_BG)
         footer_frame.pack(fill="x", pady=10)
@@ -1762,22 +1840,32 @@ class CombinedApp:
         root.minsize(820, 640)
         self.style = apply_mac_theme(root)
 
-        container = ttk.Frame(root)
-        container.pack(fill="both", expand=True)
+        container = tk.Frame(root, bg=MAC_BG)
+        container.pack(fill="both", expand=True, padx=16, pady=12)
 
-        self.notebook = ttk.Notebook(container)
-        self.notebook.pack(fill="both", expand=True, padx=16, pady=(12, 16))
+        # Detached, rounded pill tab bar
+        tabbar = tk.Frame(container, bg=MAC_BG)
+        tabbar.pack(fill="x", pady=(0, 10))
+        self.pills = {}
+        for key, label in (("chrome", "Chrome Sequencer"), ("typer", "Typer"), ("app", "Application")):
+            p = PillTab(tabbar, label, lambda k=key: self.select(k))
+            p.pack(side="left", padx=(0, 8))
+            self.pills[key] = p
 
-        self.chrome_frame = ttk.Frame(self.notebook)
-        self.typer_frame = ttk.Frame(self.notebook)
-        self.app_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.chrome_frame, text="  Chrome Sequencer  ")
-        self.notebook.add(self.typer_frame, text="  Typer  ")
-        self.notebook.add(self.app_frame, text="  Application  ")
+        # Content area (separated from the tab bar by the gap above)
+        content = tk.Frame(container, bg=MAC_BG)
+        content.pack(fill="both", expand=True)
+        self.chrome_frame = tk.Frame(content, bg=MAC_BG)
+        self.typer_frame = tk.Frame(content, bg=MAC_BG)
+        self.app_frame = tk.Frame(content, bg=MAC_BG)
+        self._frames = {"chrome": self.chrome_frame, "typer": self.typer_frame, "app": self.app_frame}
 
         self.chrome = ChromeTab(self.chrome_frame, root, global_save=self.save_all, on_done=self._focus_typer)
         self.typer = TyperTab(self.typer_frame, root, global_save=self.save_all)
         self.app = ApplicationTab(self.app_frame, root, self.chrome, global_save=self.save_all)
+
+        self.current = None
+        self.select("chrome")
 
         root.bind_all("<MouseWheel>", self._on_wheel)
         root.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -1785,20 +1873,21 @@ class CombinedApp:
         if self.app.autorun.get():
             root.after(1200, lambda: self.chrome._start(auto=True))
 
+    def select(self, key):
+        for k, frame in self._frames.items():
+            frame.pack_forget()
+        self._frames[key].pack(fill="both", expand=True)
+        for k, pill in self.pills.items():
+            pill.set_selected(k == key)
+        self.current = key
+
     def _focus_typer(self):
-        try:
-            self.notebook.select(self.typer_frame)
-        except Exception:
-            pass
+        self.select("typer")
 
     def _on_wheel(self, event):
-        try:
-            idx = self.notebook.index(self.notebook.select())
-        except Exception:
-            return
-        if idx == 0 and self.chrome.scroll_canvas is not None:
+        if self.current == "chrome" and self.chrome.scroll_canvas is not None:
             self.chrome.scroll_canvas.yview_scroll(int(-event.delta / 120), "units")
-        elif idx == 1 and getattr(self.typer, "canvas", None) is not None:
+        elif self.current == "typer" and getattr(self.typer, "canvas", None) is not None:
             self.typer.canvas.yview_scroll(int(-event.delta / 120), "units")
 
     def save_all(self, flash=True):
