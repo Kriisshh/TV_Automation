@@ -776,35 +776,34 @@ class ChromeTab:
         pcanvas.pack(side="left", fill="both", expand=True)
         pscroll.pack(side="right", fill="y", padx=(2, 0))
         if not self.profiles:
-            ttk.Label(pinner, text="No Chrome profiles found.", style="Card.TLabel").pack(anchor="w")
-        for directory, name in self.profiles:
+            ttk.Label(pinner, text="No Chrome profiles found.", style="Card.TLabel").grid(row=0, column=0, sticky="w")
+        pinner.grid_columnconfigure(0, weight=1, uniform="p")
+        pinner.grid_columnconfigure(1, weight=1, uniform="p")
+        for i, (directory, name) in enumerate(self.profiles):
             var = tk.BooleanVar(value=True)
             self.profile_vars[directory] = var
-            ttk.Checkbutton(pinner, text=f"{name}   [{directory}]", style="Card.TCheckbutton",
-                            variable=var).pack(anchor="w")
+            ttk.Checkbutton(pinner, text=name, style="Card.TCheckbutton",
+                            variable=var).grid(row=i // 2, column=i % 2, sticky="w", padx=(0, 14), pady=1)
 
+        # Final key presses - collapsible (only expands when enabled)
         fk = self._card(right, "Final key presses")
         fk.pack(fill="x")
         frow = tk.Frame(fk.body, bg=MAC_CARD); frow.pack(fill="x")
         self.final_keys_enabled = tk.BooleanVar(value=False)
         ttk.Checkbutton(frow, text="Enable", style="Card.TCheckbutton",
-                        variable=self.final_keys_enabled).pack(side="left")
-        ttk.Label(frow, text="Delay", style="CardSub.TLabel").pack(side="left", padx=(14, 2))
-        self.final_key_delay = ttk.Entry(frow, width=5)
+                        variable=self.final_keys_enabled,
+                        command=self._toggle_final_panel).pack(side="left")
+
+        self.fk_panel = tk.Frame(fk.body, bg=MAC_CARD)
+        drow = tk.Frame(self.fk_panel, bg=MAC_CARD); drow.pack(fill="x", pady=(8, 0))
+        ttk.Label(drow, text="Delay", style="CardSub.TLabel").pack(side="left")
+        self.final_key_delay = ttk.Entry(drow, width=5)
         self.final_key_delay.insert(0, "0.5")
-        self.final_key_delay.pack(side="left")
-        ttk.Label(frow, text="sec", style="CardSub.TLabel").pack(side="left", padx=(2, 0))
-        fla = tk.Frame(fk.body, bg=MAC_CARD); fla.pack(fill="x", pady=(6, 0))
-        fkcanvas = tk.Canvas(fla, height=76, highlightthickness=0, bg=MAC_CARD)
-        fkscroll = MiniScrollbar(fla, command=fkcanvas.yview, bg=MAC_CARD)
-        self.final_keys_inner = tk.Frame(fkcanvas, bg=MAC_CARD)
-        self.final_keys_inner.bind(
-            "<Configure>", lambda e: fkcanvas.configure(scrollregion=fkcanvas.bbox("all")))
-        fkcanvas.create_window((0, 0), window=self.final_keys_inner, anchor="nw")
-        fkcanvas.configure(yscrollcommand=fkscroll.set)
-        fkcanvas.pack(side="left", fill="x", expand=True)
-        fkscroll.pack(side="right", fill="y", padx=(2, 0))
-        ttk.Button(fk.body, text="+ Add key", command=self._add_final_key).pack(anchor="w", pady=(6, 0))
+        self.final_key_delay.pack(side="left", padx=(4, 2))
+        ttk.Label(drow, text="sec between keys", style="CardSub.TLabel").pack(side="left")
+        self.final_keys_inner = tk.Frame(self.fk_panel, bg=MAC_CARD)
+        self.final_keys_inner.pack(fill="x", pady=(6, 0))
+        ttk.Button(self.fk_panel, text="+ Add key", command=self._add_final_key).pack(anchor="w", pady=(6, 0))
         self.final_key_recorders = []
 
         # Bottom action bar
@@ -872,6 +871,7 @@ class ChromeTab:
         for k in cfg.get("final_keys", []):
             if k:
                 self._add_final_key(k)
+        self._toggle_final_panel()
 
     def _save_clicked(self):
         if self.global_save:
@@ -885,6 +885,12 @@ class ChromeTab:
     def _set_all(self, val):
         for v in self.profile_vars.values():
             v.set(val)
+
+    def _toggle_final_panel(self):
+        if self.final_keys_enabled.get():
+            self.fk_panel.pack(fill="x")
+        else:
+            self.fk_panel.pack_forget()
 
     def _add_final_key(self, key=""):
         rec = KeyRecorder(self.final_keys_inner, self._remove_final_key, key=key)
