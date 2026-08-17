@@ -767,7 +767,7 @@ class ChromeTab:
         ttk.Button(ptop, text="All", width=6, command=lambda: self._set_all(True)).pack(side="left", padx=(0, 4))
         ttk.Button(ptop, text="None", width=6, command=lambda: self._set_all(False)).pack(side="left")
         pwrap = tk.Frame(pf.body, bg=MAC_CARD); pwrap.pack(fill="both", expand=True)
-        pcanvas = tk.Canvas(pwrap, height=190, highlightthickness=0, bg=MAC_CARD)
+        pcanvas = tk.Canvas(pwrap, height=150, highlightthickness=0, bg=MAC_CARD)
         pscroll = MiniScrollbar(pwrap, command=pcanvas.yview, bg=MAC_CARD)
         pinner = tk.Frame(pcanvas, bg=MAC_CARD)
         pinner.bind("<Configure>", lambda e: pcanvas.configure(scrollregion=pcanvas.bbox("all")))
@@ -793,14 +793,14 @@ class ChromeTab:
         ttk.Checkbutton(frow, text="Enable", style="Card.TCheckbutton",
                         variable=self.final_keys_enabled,
                         command=self._toggle_final_panel).pack(side="left")
+        self.fk_delay_row = tk.Frame(frow, bg=MAC_CARD)
+        ttk.Label(self.fk_delay_row, text="Delay", style="CardSub.TLabel").pack(side="left", padx=(16, 4))
+        self.final_key_delay = ttk.Entry(self.fk_delay_row, width=5)
+        self.final_key_delay.insert(0, "0.5")
+        self.final_key_delay.pack(side="left")
+        ttk.Label(self.fk_delay_row, text="sec between keys", style="CardSub.TLabel").pack(side="left", padx=(4, 0))
 
         self.fk_panel = tk.Frame(fk.body, bg=MAC_CARD)
-        drow = tk.Frame(self.fk_panel, bg=MAC_CARD); drow.pack(fill="x", pady=(8, 0))
-        ttk.Label(drow, text="Delay", style="CardSub.TLabel").pack(side="left")
-        self.final_key_delay = ttk.Entry(drow, width=5)
-        self.final_key_delay.insert(0, "0.5")
-        self.final_key_delay.pack(side="left", padx=(4, 2))
-        ttk.Label(drow, text="sec between keys", style="CardSub.TLabel").pack(side="left")
         self.final_keys_inner = tk.Frame(self.fk_panel, bg=MAC_CARD)
         self.final_keys_inner.pack(fill="x", pady=(6, 0))
         ttk.Button(self.fk_panel, text="+ Add key", command=self._add_final_key).pack(anchor="w", pady=(6, 0))
@@ -888,8 +888,10 @@ class ChromeTab:
 
     def _toggle_final_panel(self):
         if self.final_keys_enabled.get():
+            self.fk_delay_row.pack(side="left")
             self.fk_panel.pack(fill="x")
         else:
+            self.fk_delay_row.pack_forget()
             self.fk_panel.pack_forget()
 
     def _add_final_key(self, key=""):
@@ -1891,10 +1893,17 @@ class CombinedApp:
         self.select("typer")
 
     def _on_wheel(self, event):
-        if self.current == "chrome" and self.chrome.scroll_canvas is not None:
-            self.chrome.scroll_canvas.yview_scroll(int(-event.delta / 120), "units")
-        elif self.current == "typer" and getattr(self.typer, "canvas", None) is not None:
-            self.typer.canvas.yview_scroll(int(-event.delta / 120), "units")
+        c = None
+        if self.current == "chrome":
+            c = self.chrome.scroll_canvas
+        elif self.current == "typer":
+            c = getattr(self.typer, "canvas", None)
+        if c is None:
+            return
+        first, last = c.yview()
+        if first <= 0.0 and last >= 1.0:
+            return  # everything already visible; nothing to scroll
+        c.yview_scroll(int(-event.delta / 120), "units")
 
     def save_all(self, flash=True):
         cfg = {}
