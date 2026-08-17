@@ -1,24 +1,27 @@
 """
-ChromeSequencer - Windows desktop automation app.
+Stream Suite - Windows desktop automation app (two tools in one tabbed window).
 
-Sequence:
+Tab 1 - Chrome Sequencer:
   1. Initial wait (fixed or random)
   2. Open selected Chrome profiles (1 window each, blank tab)
   3. Wait for extensions / VPN to load (fixed or random)
   4. Navigate every profile window to the target URL (1 tab per profile)
   5. Wait (fixed or random)
   6. For every profile window: wait, focus it, send the enabled keys ("m" and/or "c")
-  7. Launch a target .exe
-  8. Optionally send a user-defined list of final key presses (e.g. f8, f9, f10)
-  Then the app terminates itself.
+  7. Optionally send a user-defined list of final key presses (e.g. f8, f9, f10)
+  When the sequence finishes the app stays open and switches to the Typer tab.
 
-Settings are saved to config.json next to the app and reloaded on launch.
-A global hotkey (default Ctrl+Shift+Q) aborts the sequence and closes the app.
+Tab 2 - Typer:
+  A stream-chat message sequencer. Profile "groups" each own a global hotkey,
+  a switch key, loop settings, and an ordered list of message steps. Pressing a
+  group's hotkey types its messages in sequence. Adapted from TyperV9.
 
-Optional conveniences:
-  - "Launch on Windows startup" registers the app under the HKCU Run key.
-  - "Run the sequence automatically when the app launches" starts step 1 on
-    open (skipping confirmation dialogs), so startup + autorun = hands-free.
+Settings persist next to the app:
+  - config.json          (Chrome Sequencer)
+  - stream_groups.json   (Typer)
+
+UI: Apple / macOS-inspired light theme (flat, minimal, generous whitespace,
+Segoe UI as the SF-Pro substitute on Windows, system-blue accent).
 
 Deps: pip install keyboard pywin32   (tkinter ships with Python)
 Windows only.
@@ -29,10 +32,12 @@ import sys
 import json
 import time
 import random
+import shutil
+import itertools
 import threading
 import subprocess
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, filedialog, messagebox, simpledialog
 
 import keyboard
 import win32gui
@@ -46,7 +51,7 @@ from updater import __version__, check_for_update, download_and_apply
 
 
 # ----------------------------------------------------------------------------
-# Config file location (next to the .exe / script)
+# Config file locations (next to the .exe / script)
 # ----------------------------------------------------------------------------
 
 def app_dir():
@@ -55,7 +60,8 @@ def app_dir():
     return os.path.dirname(os.path.abspath(__file__))
 
 
-CONFIG_PATH = os.path.join(app_dir(), "config.json")
+CONFIG_PATH = os.path.join(app_dir(), "config.json")             # Chrome Sequencer
+STREAM_CONFIG_PATH = os.path.join(app_dir(), "stream_groups.json")  # Typer
 
 
 def load_config():
@@ -83,10 +89,8 @@ RUN_VALUE_NAME = "ChromeSequencer"
 
 
 def _startup_command():
-    """Command Windows should run at logon."""
     if getattr(sys, "frozen", False):
         return f'"{sys.executable}"'
-    # Dev mode: run this script with the current interpreter.
     return f'"{sys.executable}" "{os.path.abspath(__file__)}"'
 
 
@@ -100,7 +104,6 @@ def is_run_on_startup():
 
 
 def set_run_on_startup(enable):
-    """Add or remove the HKCU Run entry. Returns True on success."""
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as k:
             if enable:
@@ -223,6 +226,213 @@ def force_foreground(hwnd):
 
 
 # ----------------------------------------------------------------------------
+# Apple / macOS-inspired design tokens (light mode)
+# ----------------------------------------------------------------------------
+
+MAC_BG = "#F5F5F7"            # window canvas (Apple off-white)
+MAC_CARD = "#FFFFFF"         # cards / content surfaces
+MAC_TEXT = "#1D1D1F"         # primary near-black
+MAC_TEXT_SUB = "#6E6E73"     # secondary gray
+MAC_BORDER = "#D2D2D7"       # separators / control borders
+MAC_ACCENT = "#007AFF"       # system blue
+MAC_ACCENT_HOVER = "#0A6CE0"
+MAC_CONTROL_MUTED = "#EFEFF0"  # subtle neutral button bg
+MAC_CONTROL_HOVER = "#E5E5EA"
+MAC_SUCCESS = "#34C759"
+MAC_DANGER = "#FF3B30"
+MAC_DANGER_HOVER = "#E0352B"
+MAC_DISABLED_BG = "#E5E5EA"
+MAC_DISABLED_TEXT = "#B0B0B5"
+
+FONT_FAMILY = "Segoe UI"     # SF Pro substitute on Windows
+FONT_H1 = (FONT_FAMILY, 15, "bold")
+FONT_H2 = (FONT_FAMILY, 12, "bold")
+FONT_BODY = (FONT_FAMILY, 10)
+FONT_BODY_MED = (FONT_FAMILY, 10, "bold")
+FONT_SMALL = (FONT_FAMILY, 9)
+FONT_MONO = ("Consolas", 9)
+
+# --- Aliases so the ported Typer code keeps using its original names ---
+COLOR_BG = MAC_BG
+COLOR_WHITE = MAC_CARD
+COLOR_TEXT_MAIN = MAC_TEXT
+COLOR_TEXT_SUB = MAC_TEXT_SUB
+COLOR_BTN_BG = MAC_CONTROL_MUTED
+COLOR_BTN_HOVER = MAC_CONTROL_HOVER
+COLOR_BTN_TEXT = MAC_TEXT
+COLOR_ACCENT = MAC_ACCENT
+COLOR_BORDER_LIGHT = MAC_BORDER
+COLOR_STATUS_ACTIVE = MAC_SUCCESS
+COLOR_STATUS_INACTIVE = "#FF9F0A"
+
+FONT_TITLE = FONT_H2
+FONT_MAIN = FONT_BODY
+FONT_SUB = FONT_SMALL
+FONT_MONITOR = (FONT_FAMILY, 10, "bold")
+
+
+def apply_mac_theme(root):
+    """Configure a clean, Apple-like ttk theme on top of 'clam'."""
+    style = ttk.Style(root)
+    try:
+        style.theme_use("clam")
+    except tk.TclError:
+        pass
+    root.configure(bg=MAC_BG)
+
+    style.configure(".", background=MAC_BG, foreground=MAC_TEXT, font=FONT_BODY)
+    style.configure("TFrame", background=MAC_BG)
+    style.configure("Card.TFrame", background=MAC_CARD)
+
+    style.configure("TLabel", background=MAC_BG, foreground=MAC_TEXT, font=FONT_BODY)
+    style.configure("Sub.TLabel", background=MAC_BG, foreground=MAC_TEXT_SUB, font=FONT_SMALL)
+    style.configure("H1.TLabel", background=MAC_BG, foreground=MAC_TEXT, font=FONT_H1)
+    style.configure("H2.TLabel", background=MAC_BG, foreground=MAC_TEXT, font=FONT_H2)
+
+    style.configure("TEntry", fieldbackground=MAC_CARD, background=MAC_CARD,
+                    bordercolor=MAC_BORDER, lightcolor=MAC_BORDER, darkcolor=MAC_BORDER,
+                    foreground=MAC_TEXT, insertcolor=MAC_TEXT, padding=5, relief="flat")
+    style.map("TEntry",
+              bordercolor=[("focus", MAC_ACCENT)],
+              lightcolor=[("focus", MAC_ACCENT)],
+              darkcolor=[("focus", MAC_ACCENT)])
+
+    style.configure("TButton", background=MAC_CONTROL_MUTED, foreground=MAC_TEXT,
+                    bordercolor=MAC_BORDER, focuscolor=MAC_ACCENT, relief="flat",
+                    padding=(10, 5), font=FONT_BODY)
+    style.map("TButton",
+              background=[("active", MAC_CONTROL_HOVER), ("disabled", MAC_DISABLED_BG)],
+              foreground=[("disabled", MAC_DISABLED_TEXT)])
+
+    style.configure("TCheckbutton", background=MAC_BG, foreground=MAC_TEXT, font=FONT_BODY)
+    style.map("TCheckbutton", background=[("active", MAC_BG)])
+    style.configure("TRadiobutton", background=MAC_BG, foreground=MAC_TEXT, font=FONT_BODY)
+    style.map("TRadiobutton", background=[("active", MAC_BG)])
+
+    style.configure("TLabelframe", background=MAC_BG, bordercolor=MAC_BORDER, relief="solid")
+    style.configure("TLabelframe.Label", background=MAC_BG, foreground=MAC_TEXT_SUB,
+                    font=FONT_BODY_MED)
+
+    style.configure("TNotebook", background=MAC_BG, borderwidth=0, tabmargins=(6, 6, 6, 0))
+    style.configure("TNotebook.Tab", background=MAC_CONTROL_MUTED, foreground=MAC_TEXT_SUB,
+                    padding=(20, 9), font=FONT_BODY_MED, borderwidth=0)
+    style.map("TNotebook.Tab",
+              background=[("selected", MAC_CARD)],
+              foreground=[("selected", MAC_TEXT)])
+
+    style.configure("TScrollbar", background=MAC_CONTROL_MUTED, troughcolor=MAC_BG,
+                    bordercolor=MAC_BG, arrowcolor=MAC_TEXT_SUB, relief="flat")
+    return style
+
+
+# ----------------------------------------------------------------------------
+# Custom rounded button (shared by both tabs for a consistent Apple look)
+# ----------------------------------------------------------------------------
+
+class RoundedButton(tk.Canvas):
+    """Canvas-based button with rounded corners."""
+
+    def __init__(self, parent, width, height, text, command=None, radius=8,
+                 bg_color=COLOR_BTN_BG, hover_color=COLOR_BTN_HOVER,
+                 text_color=COLOR_BTN_TEXT, canvas_bg=COLOR_BG):
+        super().__init__(parent, width=width, height=height, bg=canvas_bg, highlightthickness=0)
+        self.command = command
+        self.radius = radius
+        self.bg_color = bg_color
+        self.hover_color = hover_color
+        self.text_color = text_color
+        self.text = text
+        self._enabled = True
+
+        self.rect = self._draw_rounded_rect(2, 2, width - 2, height - 2, radius, bg_color)
+        self.text_id = self.create_text(width / 2, height / 2, text=text, fill=text_color, font=FONT_BODY_MED)
+
+        self.bind("<Enter>", self._on_hover)
+        self.bind("<Leave>", self._on_leave)
+        self.bind("<Button-1>", self._on_click)
+        self.bind("<ButtonRelease-1>", self._on_release)
+
+    def _draw_rounded_rect(self, x1, y1, x2, y2, r, fill):
+        points = [x1 + r, y1, x1 + r, y1, x2 - r, y1, x2 - r, y1, x2, y1, x2, y1 + r, x2, y1 + r,
+                  x2, y2 - r, x2, y2 - r, x2, y2, x2 - r, y2, x2 - r, y2, x1 + r, y2, x1 + r, y2,
+                  x1, y2, x1, y2 - r, x1, y2 - r, x1, y1 + r, x1, y1 + r, x1, y1]
+        return self.create_polygon(points, fill=fill, smooth=True)
+
+    def set_enabled(self, enabled):
+        self._enabled = enabled
+        self.itemconfig(self.rect, fill=self.bg_color if enabled else MAC_DISABLED_BG)
+        self.itemconfig(self.text_id, fill=self.text_color if enabled else MAC_DISABLED_TEXT)
+
+    def _on_hover(self, event):
+        if self._enabled:
+            self.itemconfig(self.rect, fill=self.hover_color)
+
+    def _on_leave(self, event):
+        if self._enabled:
+            self.itemconfig(self.rect, fill=self.bg_color)
+
+    def _on_click(self, event):
+        if self._enabled:
+            self.itemconfig(self.rect, fill=self.hover_color)
+
+    def _on_release(self, event):
+        if not self._enabled:
+            return
+        self.itemconfig(self.rect, fill=self.hover_color)
+        if self.command:
+            self.command()
+
+
+class CustomOptionMenu(tk.Frame):
+    """Styled option menu with border and arrow."""
+
+    def __init__(self, parent, var, options, width=15, command=None):
+        super().__init__(parent, bg=COLOR_WHITE, bd=1, relief="solid", highlightthickness=0)
+        self.var = var
+        self.options = options
+        self.command = command
+
+        content_frame = tk.Frame(self, bg=COLOR_WHITE)
+        content_frame.pack(fill="both", expand=True, padx=2, pady=2)
+
+        self.label = tk.Label(content_frame, textvariable=var, bg=COLOR_WHITE, fg=COLOR_TEXT_MAIN,
+                              font=FONT_MAIN, width=width, anchor="w", cursor="hand2")
+        self.label.pack(side="left", fill="x", expand=True)
+
+        self.arrow = tk.Label(content_frame, text="▼", bg=COLOR_WHITE, fg=COLOR_TEXT_SUB,
+                              font=("Arial", 8), cursor="hand2")
+        self.arrow.pack(side="right", padx=5)
+
+        self.bind("<Button-1>", self._show_menu)
+        content_frame.bind("<Button-1>", self._show_menu)
+        self.label.bind("<Button-1>", self._show_menu)
+        self.arrow.bind("<Button-1>", self._show_menu)
+
+        self.menu = tk.Menu(self, tearoff=0, bg=COLOR_WHITE, font=FONT_MAIN)
+        self._update_menu()
+
+        var.trace_add("write", lambda *args: self.label.config(text=var.get()))
+
+    def _update_menu(self):
+        self.menu.delete(0, "end")
+        for choice in self.options:
+            self.menu.add_command(label=choice, command=lambda value=choice: self._select_choice(value))
+
+    def _select_choice(self, value):
+        self.var.set(value)
+        if self.command:
+            self.command(value)
+
+    def _show_menu(self, event=None):
+        try:
+            x = self.winfo_rootx()
+            y = self.winfo_rooty() + self.winfo_height()
+            self.menu.post(x, y)
+        except Exception:
+            pass
+
+
+# ----------------------------------------------------------------------------
 # Delay widget (fixed or random)
 # ----------------------------------------------------------------------------
 
@@ -232,7 +442,7 @@ class DelayInput:
         self.mode = tk.StringVar(value="fixed")
 
         row = ttk.Frame(self.frame)
-        row.pack(fill="x", padx=6, pady=4)
+        row.pack(fill="x", padx=8, pady=6)
 
         ttk.Radiobutton(row, text="Fixed", variable=self.mode, value="fixed",
                         command=self._sync).grid(row=0, column=0, sticky="w")
@@ -300,14 +510,12 @@ class DelayInput:
 # Key recorder (click, then press a key to capture it, e.g. f8/f9/f10)
 # ----------------------------------------------------------------------------
 
-# tkinter keysyms that are modifier keys on their own -> ignore as captures
 _MODIFIER_KEYSYMS = {
     "Shift_L", "Shift_R", "Control_L", "Control_R",
     "Alt_L", "Alt_R", "Win_L", "Win_R", "Super_L", "Super_R",
     "Caps_Lock", "Num_Lock", "Scroll_Lock",
 }
 
-# tkinter keysym -> keyboard-library key name, where they differ
 _KEYSYM_MAP = {
     "next": "page down", "prior": "page up",
     "return": "enter", "escape": "esc",
@@ -317,7 +525,6 @@ _KEYSYM_MAP = {
 
 
 def _keysym_to_key(event):
-    """Translate a tkinter key event into a keyboard-lib key name, or '' to ignore."""
     ks = event.keysym
     if ks in _MODIFIER_KEYSYMS:
         return ""
@@ -336,19 +543,15 @@ class KeyRecorder:
         self.recording = False
         self.var = tk.StringVar(value=(key if key else self.PLACEHOLDER))
 
-        self.entry = ttk.Entry(self.frame, textvariable=self.var, width=22,
-                               justify="center")
+        self.entry = ttk.Entry(self.frame, textvariable=self.var, width=22, justify="center")
         self.entry.pack(side="left", padx=(0, 6))
         self.entry.bind("<Button-1>", self._begin_record)
         self.entry.bind("<FocusIn>", self._begin_record)
         self.entry.bind("<FocusOut>", self._end_record)
-        # Swallow all typing; we set the text ourselves from the keysym.
         self.entry.bind("<KeyPress>", self._on_key)
 
-        ttk.Button(self.frame, text="Record", width=7,
-                   command=self._focus).pack(side="left", padx=(0, 6))
-        ttk.Button(self.frame, text="✕", width=3,
-                   command=lambda: on_remove(self)).pack(side="left")
+        ttk.Button(self.frame, text="Record", width=7, command=self._focus).pack(side="left", padx=(0, 6))
+        ttk.Button(self.frame, text="✕", width=3, command=lambda: on_remove(self)).pack(side="left")
 
     def _focus(self):
         self.entry.focus_set()
@@ -363,14 +566,13 @@ class KeyRecorder:
         self.var.set(self.key if self.key else self.PLACEHOLDER)
 
     def _on_key(self, event):
-        # Always block the keystroke from editing the entry.
         if self.recording:
             name = _keysym_to_key(event)
-            if name:  # ignore lone modifier presses
+            if name:
                 self.key = name
                 self.var.set(name)
                 self.recording = False
-                self.frame.focus_set()  # drop focus off the entry
+                self.frame.focus_set()
         return "break"
 
     def get_key(self):
@@ -384,15 +586,14 @@ class KeyRecorder:
 
 
 # ----------------------------------------------------------------------------
-# Main app
+# TAB 1 - Chrome Sequencer
 # ----------------------------------------------------------------------------
 
-class App:
-    def __init__(self, root):
+class ChromeTab:
+    def __init__(self, parent, root, on_done=None):
+        self.parent = parent
         self.root = root
-        root.title(f"ChromeSequencer v{__version__}")
-        root.geometry("660x860")
-        root.minsize(560, 600)
+        self.on_done = on_done
 
         self.stop_event = threading.Event()
         self.worker = None
@@ -401,67 +602,62 @@ class App:
         self.chrome_exe = find_chrome_exe()
         self.profiles = list_profiles()
         self.profile_vars = {}
+        self.scroll_canvas = None
 
         self._build_ui()
         self._load_settings()
         self._register_hotkey(self.hotkey_entry.get())
-        root.protocol("WM_DELETE_WINDOW", self._on_close)
-        self._maybe_autorun()
 
     # ---- UI ----
     def _build_ui(self):
-        pad = {"padx": 10, "pady": 4}
+        pad = {"padx": 12, "pady": 5}
 
-        # Scrollable body so the (now taller) form never gets cut off.
-        outer = tk.Canvas(self.root, highlightthickness=0)
-        vsb = ttk.Scrollbar(self.root, orient="vertical", command=outer.yview)
+        outer = tk.Canvas(self.parent, highlightthickness=0, bg=MAC_BG)
+        vsb = ttk.Scrollbar(self.parent, orient="vertical", command=outer.yview)
         outer.configure(yscrollcommand=vsb.set)
         vsb.pack(side="right", fill="y")
         outer.pack(side="left", fill="both", expand=True)
+        self.scroll_canvas = outer
         body = ttk.Frame(outer)
         body_win = outer.create_window((0, 0), window=body, anchor="nw")
         body.bind("<Configure>", lambda e: outer.configure(scrollregion=outer.bbox("all")))
         outer.bind("<Configure>", lambda e: outer.itemconfigure(body_win, width=e.width))
-        outer.bind_all("<MouseWheel>", lambda e: outer.yview_scroll(int(-e.delta / 120), "units"))
+
+        ttk.Label(body, text="Chrome Sequencer", style="H1.TLabel").pack(anchor="w", padx=12, pady=(12, 2))
+        ttk.Label(body, text="Open Chrome profiles, navigate them, and send keystrokes.",
+                  style="Sub.TLabel").pack(anchor="w", padx=12, pady=(0, 8))
 
         url_f = ttk.Frame(body)
         url_f.pack(fill="x", **pad)
-        ttk.Label(url_f, text="URL:").pack(side="left")
+        ttk.Label(url_f, text="URL", width=12).pack(side="left")
         self.url_entry = ttk.Entry(url_f)
         self.url_entry.insert(0, "https://")
         self.url_entry.pack(side="left", fill="x", expand=True, padx=6)
 
         cx = ttk.Frame(body)
         cx.pack(fill="x", **pad)
-        ttk.Label(cx, text="Chrome:").pack(side="left")
+        ttk.Label(cx, text="Chrome path", width=12).pack(side="left")
         self.chrome_entry = ttk.Entry(cx)
         self.chrome_entry.insert(0, self.chrome_exe)
         self.chrome_entry.pack(side="left", fill="x", expand=True, padx=6)
-        ttk.Button(cx, text="...", width=3, command=self._browse_chrome).pack(side="left")
-
-        ex = ttk.Frame(body)
-        ex.pack(fill="x", **pad)
-        ttk.Label(ex, text=".exe to launch:").pack(side="left")
-        self.exe_entry = ttk.Entry(ex)
-        self.exe_entry.pack(side="left", fill="x", expand=True, padx=6)
-        ttk.Button(ex, text="...", width=3, command=self._browse_exe).pack(side="left")
+        ttk.Button(cx, text="Browse", width=8, command=self._browse_chrome).pack(side="left")
 
         # Startup options
         opt = ttk.LabelFrame(body, text="Startup options")
-        opt.pack(fill="x", padx=10, pady=4)
+        opt.pack(fill="x", padx=12, pady=5)
         self.run_on_startup = tk.BooleanVar(value=is_run_on_startup())
         ttk.Checkbutton(opt, text="Launch this app when Windows starts",
                         variable=self.run_on_startup,
-                        command=self._toggle_startup).pack(anchor="w", padx=6, pady=(4, 0))
+                        command=self._toggle_startup).pack(anchor="w", padx=8, pady=(6, 0))
         self.autorun = tk.BooleanVar(value=False)
         ttk.Checkbutton(opt, text="Run the sequence automatically when the app launches",
-                        variable=self.autorun).pack(anchor="w", padx=6, pady=(0, 4))
+                        variable=self.autorun).pack(anchor="w", padx=8, pady=(0, 6))
 
         # Keys to send per tab
         kf = ttk.LabelFrame(body, text="6. Keys to send per tab")
-        kf.pack(fill="x", padx=10, pady=4)
+        kf.pack(fill="x", padx=12, pady=5)
         krow = ttk.Frame(kf)
-        krow.pack(fill="x", padx=6, pady=4)
+        krow.pack(fill="x", padx=8, pady=6)
         self.send_m = tk.BooleanVar(value=True)
         self.send_c = tk.BooleanVar(value=True)
         ttk.Checkbutton(krow, text='Send  "m"', variable=self.send_m).pack(side="left", padx=(0, 20))
@@ -475,30 +671,30 @@ class App:
         # Hotkey
         hk = ttk.Frame(body)
         hk.pack(fill="x", **pad)
-        ttk.Label(hk, text="Abort hotkey:").pack(side="left")
+        ttk.Label(hk, text="Abort hotkey", width=12).pack(side="left")
         self.hotkey_entry = ttk.Entry(hk, width=20)
         self.hotkey_entry.insert(0, "ctrl+shift+q")
         self.hotkey_entry.pack(side="left", padx=6)
-        ttk.Button(hk, text="Set", command=self._apply_hotkey).pack(side="left")
+        ttk.Button(hk, text="Set", width=6, command=self._apply_hotkey).pack(side="left")
 
         # Delays
         self.d_initial = DelayInput(body, "1. Initial wait", "3", "3", "6")
-        self.d_initial.pack(fill="x", padx=10, pady=4)
+        self.d_initial.pack(fill="x", padx=12, pady=5)
         self.d_ext = DelayInput(body, "3. Wait for extensions / VPN", "10", "8", "15")
-        self.d_ext.pack(fill="x", padx=10, pady=4)
+        self.d_ext.pack(fill="x", padx=12, pady=5)
         self.d_afterurl = DelayInput(body, "5. Wait after opening URLs", "5", "4", "8")
-        self.d_afterurl.pack(fill="x", padx=10, pady=4)
+        self.d_afterurl.pack(fill="x", padx=12, pady=5)
         self.d_pertab = DelayInput(body, "6. Wait before each tab's keys", "1", "1", "3")
-        self.d_pertab.pack(fill="x", padx=10, pady=4)
+        self.d_pertab.pack(fill="x", padx=12, pady=5)
 
         # Profiles
         pf = ttk.LabelFrame(body, text="2. Chrome profiles (1 window each)")
-        pf.pack(fill="x", padx=10, pady=6)
+        pf.pack(fill="x", padx=12, pady=6)
         top = ttk.Frame(pf)
         top.pack(fill="x")
-        ttk.Button(top, text="All", command=lambda: self._set_all(True)).pack(side="left", padx=2, pady=2)
-        ttk.Button(top, text="None", command=lambda: self._set_all(False)).pack(side="left", padx=2, pady=2)
-        canvas = tk.Canvas(pf, height=120, highlightthickness=0)
+        ttk.Button(top, text="All", width=6, command=lambda: self._set_all(True)).pack(side="left", padx=2, pady=2)
+        ttk.Button(top, text="None", width=6, command=lambda: self._set_all(False)).pack(side="left", padx=2, pady=2)
+        canvas = tk.Canvas(pf, height=120, highlightthickness=0, bg=MAC_BG)
         scroll = ttk.Scrollbar(pf, orient="vertical", command=canvas.yview)
         inner = ttk.Frame(canvas)
         inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
@@ -513,11 +709,11 @@ class App:
             self.profile_vars[directory] = var
             ttk.Checkbutton(inner, text=f"{name}   [{directory}]", variable=var).pack(anchor="w")
 
-        # Final key presses (sent before the app exits)
-        fk = ttk.LabelFrame(body, text="8. Final key presses (sent before the app exits)")
-        fk.pack(fill="x", padx=10, pady=4)
+        # Final key presses
+        fk = ttk.LabelFrame(body, text="7. Final key presses (sent at the end of the sequence)")
+        fk.pack(fill="x", padx=12, pady=5)
         frow = ttk.Frame(fk)
-        frow.pack(fill="x", padx=6, pady=(4, 2))
+        frow.pack(fill="x", padx=8, pady=(6, 2))
         self.final_keys_enabled = tk.BooleanVar(value=False)
         ttk.Checkbutton(frow, text="Enable final key presses",
                         variable=self.final_keys_enabled).pack(side="left")
@@ -528,8 +724,8 @@ class App:
         ttk.Label(frow, text="sec").pack(side="left", padx=(2, 0))
 
         list_area = ttk.Frame(fk)
-        list_area.pack(fill="x", padx=6)
-        fkcanvas = tk.Canvas(list_area, height=90, highlightthickness=0)
+        list_area.pack(fill="x", padx=8)
+        fkcanvas = tk.Canvas(list_area, height=90, highlightthickness=0, bg=MAC_BG)
         fkscroll = ttk.Scrollbar(list_area, orient="vertical", command=fkcanvas.yview)
         self.final_keys_inner = ttk.Frame(fkcanvas)
         self.final_keys_inner.bind(
@@ -538,24 +734,26 @@ class App:
         fkcanvas.configure(yscrollcommand=fkscroll.set)
         fkcanvas.pack(side="left", fill="x", expand=True)
         fkscroll.pack(side="right", fill="y")
-        ttk.Button(fk, text="+ Add key", command=self._add_final_key).pack(anchor="w", padx=6, pady=(2, 6))
+        ttk.Button(fk, text="+ Add key", command=self._add_final_key).pack(anchor="w", padx=8, pady=(2, 6))
         self.final_key_recorders = []
 
         ctrl = ttk.Frame(body)
-        ctrl.pack(fill="x", padx=10, pady=6)
-        self.start_btn = ttk.Button(ctrl, text="START", command=self._start)
+        ctrl.pack(fill="x", padx=12, pady=8)
+        self.start_btn = RoundedButton(ctrl, 150, 40, "Start", command=self._start, radius=10,
+                                       bg_color=MAC_ACCENT, hover_color=MAC_ACCENT_HOVER, text_color="#FFFFFF")
         self.start_btn.pack(side="left")
-        ttk.Button(ctrl, text="ABORT", command=self._abort).pack(side="left", padx=6)
+        RoundedButton(ctrl, 110, 40, "Abort", command=self._abort, radius=10,
+                      bg_color=MAC_DANGER, hover_color=MAC_DANGER_HOVER, text_color="#FFFFFF").pack(side="left", padx=8)
 
-        self.log = tk.Text(body, height=6, state="disabled")
-        self.log.pack(fill="both", expand=False, padx=10, pady=(0, 10))
+        self.log = tk.Text(body, height=6, state="disabled", bg=MAC_CARD, fg=MAC_TEXT,
+                           relief="solid", bd=1, font=FONT_MONO, highlightthickness=0, padx=8, pady=6)
+        self.log.pack(fill="both", expand=False, padx=12, pady=(0, 12))
 
     # ---- settings persistence ----
     def _collect_settings(self):
         return {
             "url": self.url_entry.get(),
             "chrome": self.chrome_entry.get(),
-            "exe": self.exe_entry.get(),
             "hotkey": self.hotkey_entry.get(),
             "send_m": self.send_m.get(),
             "send_c": self.send_c.get(),
@@ -582,8 +780,6 @@ class App:
             self.url_entry.delete(0, "end"); self.url_entry.insert(0, cfg["url"])
         if cfg.get("chrome"):
             self.chrome_entry.delete(0, "end"); self.chrome_entry.insert(0, cfg["chrome"])
-        if "exe" in cfg:
-            self.exe_entry.delete(0, "end"); self.exe_entry.insert(0, cfg["exe"])
         if cfg.get("hotkey"):
             self.hotkey_entry.delete(0, "end"); self.hotkey_entry.insert(0, cfg["hotkey"])
         if "send_m" in cfg:
@@ -611,8 +807,6 @@ class App:
         for k in cfg.get("final_keys", []):
             if k:
                 self._add_final_key(k)
-        # Registry is the source of truth for startup; reconcile it with config
-        # so the setting follows the app across machines / reinstalls.
         if "run_on_startup" in cfg:
             want = bool(cfg["run_on_startup"])
             if want != is_run_on_startup():
@@ -622,19 +816,10 @@ class App:
     def _save_settings(self):
         save_config(self._collect_settings())
 
-    def _on_close(self):
-        self._save_settings()
-        os._exit(0)
-
     def _browse_chrome(self):
         p = filedialog.askopenfilename(filetypes=[("chrome.exe", "chrome.exe"), ("Executable", "*.exe")])
         if p:
             self.chrome_entry.delete(0, "end"); self.chrome_entry.insert(0, p)
-
-    def _browse_exe(self):
-        p = filedialog.askopenfilename(filetypes=[("Executable", "*.exe"), ("All", "*.*")])
-        if p:
-            self.exe_entry.delete(0, "end"); self.exe_entry.insert(0, p)
 
     def _set_all(self, val):
         for v in self.profile_vars.values():
@@ -648,7 +833,6 @@ class App:
                       ("enabled" if self.run_on_startup.get() else "disabled"))
         else:
             self._log("Could not update the Windows startup setting.")
-            # revert the checkbox to reflect the real (unchanged) state
             self.run_on_startup.set(is_run_on_startup())
         self._save_settings()
 
@@ -697,7 +881,7 @@ class App:
     def _hotkey_fired(self):
         self.stop_event.set()
         self._save_settings()
-        os._exit(0)
+        self._log("Abort hotkey pressed - stopping sequence.")
 
     # ---- run ----
     def _sleep(self, seconds):
@@ -726,7 +910,6 @@ class App:
             return
         url = self.url_entry.get().strip()
         if not url or url == "https://":
-            # Don't block an unattended auto-run with a dialog.
             if not auto and not messagebox.askyesno("URL", "URL looks empty. Continue anyway?"):
                 return
 
@@ -743,11 +926,11 @@ class App:
 
         self._save_settings()
         self.stop_event.clear()
-        self.start_btn.config(state="disabled")
+        self.start_btn.set_enabled(False)
         self.worker = threading.Thread(
             target=self._run_sequence,
             args=(chrome, url, selected, self.send_m.get(), self.send_c.get(),
-                  key_delay, self.exe_entry.get().strip(), final_keys, final_delay),
+                  key_delay, final_keys, final_delay),
             daemon=True,
         )
         self.worker.start()
@@ -755,9 +938,9 @@ class App:
     def _abort(self):
         self.stop_event.set()
         self._save_settings()
-        os._exit(0)
+        self._log("Abort requested - stopping sequence.")
 
-    def _run_sequence(self, chrome, url, profiles, send_m, send_c, key_delay, target_exe,
+    def _run_sequence(self, chrome, url, profiles, send_m, send_c, key_delay,
                       final_keys=None, final_delay=0.5):
         try:
             keys = []
@@ -825,21 +1008,8 @@ class App:
                     if i < len(keys) - 1:
                         self._sleep(key_delay)
 
-            if target_exe:
-                if os.path.isfile(target_exe):
-                    self._log(f"[7] Launching {target_exe}")
-                    try:
-                        os.startfile(target_exe)
-                    except Exception as e:
-                        self._log(f"    Failed to launch exe: {e}")
-                else:
-                    self._log(f"[7] WARNING: exe not found: {target_exe}")
-            else:
-                self._log("[7] No exe specified, skipping.")
-
             if final_keys:
-                self._log(f"[8] Final key presses before exit: {final_keys}")
-                # give the just-launched exe a moment to take focus
+                self._log(f"[7] Final key presses: {final_keys}")
                 self._sleep(1.0)
                 for i, k in enumerate(final_keys):
                     if self.stop_event.is_set():
@@ -852,18 +1022,23 @@ class App:
                     if i < len(final_keys) - 1:
                         self._sleep(final_delay)
 
-            self._log("Done. Terminating app.")
+            self._log("Done.")
             self._save_settings()
-            time.sleep(1.0)
-            os._exit(0)
+            self.root.after(0, self._sequence_finished)
 
         except KeyboardInterrupt:
             self._log("Aborted.")
             self._save_settings()
-            os._exit(0)
+            self.root.after(0, lambda: self.start_btn.set_enabled(True))
         except Exception as e:
             self._log(f"Error: {e}")
-            self.root.after(0, lambda: self.start_btn.config(state="normal"))
+            self.root.after(0, lambda: self.start_btn.set_enabled(True))
+
+    def _sequence_finished(self):
+        self.start_btn.set_enabled(True)
+        if self.on_done:
+            self._log("Switching to Typer tab.")
+            self.on_done()
 
     def _wait_for_new_window(self, before, timeout=15):
         end = time.time() + timeout
@@ -877,6 +1052,687 @@ class App:
         return None
 
 
+# ----------------------------------------------------------------------------
+# TAB 2 - Typer (adapted from TyperV9)
+# ----------------------------------------------------------------------------
+
+class TyperTab:
+    def __init__(self, parent, root):
+        self.parent = parent
+        self.root = root
+
+        self.current_group_name = None
+        self.editor_loaded = False
+
+        self.groups = self._load_config()
+        if not self.groups:
+            self._create_default_group()
+
+        self.current_group_name = next(iter(self.groups)) if self.groups else None
+
+        self.hotkey_lock = threading.Lock()
+        self._hotkey_handles = []
+        self.editor_hotkey_label = None
+        self.editor_step_entries = []
+
+        self.ctrl_var = None
+        self.shift_var = None
+        self.loop_enabled_var = None
+        self.loop_count_var = None
+
+        self.step_iterators = {}
+        self.running_events = {}
+        self.macro_monitor_window = None
+
+        self._setup_ui()
+        self._load_group_to_editor()
+        self._setup_all_hotkeys()
+
+    def _create_default_group(self):
+        default_name = "Group A: New Profile"
+        self.groups[default_name] = {
+            "hotkey": "",
+            "switch_key": "alt+esc",
+            "loop_enabled": False,
+            "loop_count": 0,
+            "steps": [{"msg": "", "delay": "1-2", "multi_enabled": False, "multi_mode": "Sequential"}],
+        }
+        return default_name
+
+    def _load_config(self):
+        if os.path.exists(STREAM_CONFIG_PATH):
+            try:
+                with open(STREAM_CONFIG_PATH, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+            except json.JSONDecodeError as e:
+                messagebox.showerror("Error", f"Failed to load config (JSON format error): {e}")
+                return {}
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to load config (File/Encoding error): {e}")
+                return {}
+
+            processed_data = {}
+            try:
+                for name, group in data.items():
+                    if "loop_enabled" not in group: group["loop_enabled"] = False
+                    if "loop_count" not in group: group["loop_count"] = 0
+
+                    for step in group.get("steps", []):
+                        if "multi_enabled" not in step: step["multi_enabled"] = False
+                        if "multi_mode" not in step: step["multi_mode"] = "Sequential"
+                        if not step.get('delay'): step['delay'] = '1-2'
+
+                    processed_data[name] = group
+
+                if processed_data:
+                    return processed_data
+
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to process config data structure. Error details: {e}")
+                return {}
+
+        return {}
+
+    def _save_config(self):
+        if self.groups:
+            try:
+                with open(STREAM_CONFIG_PATH, 'w', encoding='utf-8') as f:
+                    json.dump(self.groups, f, indent=4, ensure_ascii=False)
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to save: {e}")
+
+    # --- UI CONSTRUCTION ---
+
+    def _setup_ui(self):
+        self.main_container = tk.Frame(self.parent, bg=COLOR_BG)
+        self.main_container.pack(fill="both", expand=True, padx=24, pady=16)
+
+        top_row = tk.Frame(self.main_container, bg=COLOR_BG)
+        top_row.pack(fill="x", anchor="w", pady=(0, 5))
+
+        tk.Label(top_row, text="Typer", font=FONT_H1, bg=COLOR_BG, fg=COLOR_TEXT_MAIN).pack(side="left", anchor="w")
+
+        self.menu_btn = RoundedButton(top_row, 34, 30, "☰", command=self._show_hamburger_menu, radius=8)
+        self.menu_btn.pack(side="right", padx=(10, 0))
+
+        self.status_btn = RoundedButton(top_row, 160, 30, "Show Active Macros", command=self._show_active_macros_window,
+                                        radius=8, bg_color=COLOR_ACCENT, hover_color=MAC_ACCENT_HOVER, text_color="#FFFFFF")
+        self.status_btn.pack(side="right", padx=10)
+
+        self.hamburger_menu = tk.Menu(self.root, tearoff=0, bg=COLOR_WHITE, font=FONT_MAIN)
+        self.hamburger_menu.add_command(label="Export Config", command=self._export_config)
+        self.hamburger_menu.add_command(label="Import Config", command=self._import_config)
+
+        tk.Label(self.main_container, text="Stream-chat message sequencer. Each profile owns a hotkey.",
+                 font=FONT_SUB, bg=COLOR_BG, fg=COLOR_TEXT_SUB).pack(anchor="w", pady=(0, 12))
+
+        group_frame = tk.Frame(self.main_container, bg=COLOR_BG)
+        group_frame.pack(fill="x", anchor="w", pady=(0, 25))
+
+        self.group_options = list(self.groups.keys())
+        self.group_var = tk.StringVar(self.root)
+        if self.current_group_name:
+            self.group_var.set(self.current_group_name)
+
+        self.group_dropdown = CustomOptionMenu(group_frame, self.group_var, self.group_options,
+                                               width=30, command=self._switch_group)
+        self.group_dropdown.pack(side="left", padx=(0, 20))
+
+        RoundedButton(group_frame, 60, 30, "New", command=self._add_group, radius=8).pack(side="left", padx=5)
+        RoundedButton(group_frame, 80, 30, "Rename", command=self._rename_group, radius=8).pack(side="left", padx=5)
+        RoundedButton(group_frame, 70, 30, "Delete", command=self._delete_group, radius=8).pack(side="left", padx=5)
+
+        self.settings_container = tk.Frame(self.main_container, bg=COLOR_BG)
+        self.settings_container.pack(fill="x", anchor="w")
+
+        self.settings_grid = tk.Frame(self.settings_container, bg=COLOR_BG)
+        self.settings_grid.pack(anchor="w")
+
+        tk.Frame(self.main_container, height=20, bg=COLOR_BG).pack()
+
+        step_header_frame = tk.Frame(self.main_container, bg=COLOR_BG)
+        step_header_frame.pack(fill="x", anchor="w")
+        tk.Label(step_header_frame, text="Message Sequence", font=FONT_TITLE, bg=COLOR_BG, fg=COLOR_TEXT_MAIN).pack(side="left")
+
+        list_border_frame = tk.Frame(self.main_container, bg=COLOR_BORDER_LIGHT, bd=1)
+        list_border_frame.pack(fill="both", expand=True, pady=(5, 10), anchor="w")
+
+        self.canvas = tk.Canvas(list_border_frame, bg=COLOR_WHITE, highlightthickness=0)
+        self.scrollbar = tk.Scrollbar(list_border_frame, orient="vertical", command=self.canvas.yview)
+        self.scrollable_frame = tk.Frame(self.canvas, bg=COLOR_WHITE)
+
+        self.scrollable_frame.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
+        self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
+        self.canvas.configure(yscrollcommand=self.scrollbar.set)
+
+        self.canvas.pack(side="left", fill="both", expand=True)
+        self.scrollbar.pack(side="right", fill="y")
+
+        footer_frame = tk.Frame(self.main_container, bg=COLOR_BG)
+        footer_frame.pack(fill="x", pady=10)
+
+        RoundedButton(footer_frame, 120, 35, "+ Add Step", command=lambda: self._add_step_row(len(self.editor_step_entries) + 1), radius=10).pack(side="left")
+
+        right_footer = tk.Frame(footer_frame, bg=COLOR_BG)
+        right_footer.pack(side="right")
+
+        self.status_label = tk.Label(right_footer, text="Ready", fg=COLOR_TEXT_SUB, bg=COLOR_BG, font=FONT_SUB)
+        self.status_label.pack(side="left", padx=15)
+
+        self.save_button = RoundedButton(right_footer, 180, 40, "SAVE & RELOAD", command=self._reload_and_save,
+                                         radius=10, bg_color=MAC_ACCENT, hover_color=MAC_ACCENT_HOVER, text_color="#FFFFFF")
+        self.save_button.pack(side="left")
+
+    def _show_hamburger_menu(self):
+        try:
+            btn_x = self.menu_btn.winfo_rootx()
+            btn_w = self.menu_btn.winfo_width()
+            menu_w = 150
+
+            x = btn_x - menu_w + btn_w
+            y = self.menu_btn.winfo_rooty() + self.menu_btn.winfo_height()
+
+            self.hamburger_menu.post(x, y)
+        except Exception:
+            pass
+
+    # --- Active Macros Monitor Window ---
+
+    def _show_active_macros_window(self):
+        if self.macro_monitor_window and self.macro_monitor_window.winfo_exists():
+            self.macro_monitor_window.lift()
+            return
+
+        self.macro_monitor_window = tk.Toplevel(self.root)
+        self.macro_monitor_window.title("Active Macro Status")
+        self.macro_monitor_window.geometry("350x300")
+        self.macro_monitor_window.configure(bg=COLOR_WHITE)
+        self.macro_monitor_window.resizable(False, False)
+
+        tk.Label(self.macro_monitor_window, text="Active Macro Status", font=FONT_TITLE, bg=COLOR_WHITE, fg=COLOR_TEXT_MAIN, padx=10, pady=10).pack(fill="x")
+
+        monitor_frame = tk.Frame(self.macro_monitor_window, bg=COLOR_WHITE)
+        monitor_frame.pack(fill="both", expand=True, padx=10, pady=5)
+
+        tk.Label(monitor_frame, text="Group", font=FONT_SUB, bg=COLOR_WHITE, fg=COLOR_TEXT_SUB, anchor="w", width=20).grid(row=0, column=0, sticky="w")
+        tk.Label(monitor_frame, text="Hotkey", font=FONT_SUB, bg=COLOR_WHITE, fg=COLOR_TEXT_SUB, anchor="w", width=10).grid(row=0, column=1, sticky="w")
+        tk.Label(monitor_frame, text="Status", font=FONT_SUB, bg=COLOR_WHITE, fg=COLOR_TEXT_SUB, anchor="w").grid(row=0, column=2, sticky="w")
+
+        self.macro_status_labels = {}
+        row_num = 1
+
+        for name, data in self.groups.items():
+            hotkey_str = data.get('hotkey', 'N/A')
+            if hotkey_str == "": hotkey_str = "N/A"
+
+            tk.Label(monitor_frame, text=name, font=FONT_MAIN, bg=COLOR_WHITE, fg=COLOR_TEXT_MAIN, anchor="w").grid(row=row_num, column=0, sticky="w", pady=2)
+            tk.Label(monitor_frame, text=hotkey_str.upper(), font=FONT_MONITOR, bg=COLOR_WHITE, fg=COLOR_TEXT_MAIN, anchor="w").grid(row=row_num, column=1, sticky="w")
+
+            status_label = tk.Label(monitor_frame, text="INACTIVE", font=FONT_MAIN, bg=COLOR_WHITE, fg=COLOR_STATUS_INACTIVE, anchor="w")
+            status_label.grid(row=row_num, column=2, sticky="w", padx=10)
+
+            self.macro_status_labels[name] = status_label
+            row_num += 1
+
+        self._update_macro_status()
+
+    def _update_macro_status(self):
+        if not self.macro_monitor_window or not self.macro_monitor_window.winfo_exists():
+            return
+
+        for name, label in self.macro_status_labels.items():
+            ev = self.running_events.get(name)
+            is_active = getattr(ev, 'active', False) if ev else False
+
+            if is_active:
+                label.config(text="ACTIVE", fg=COLOR_STATUS_ACTIVE)
+            else:
+                label.config(text="INACTIVE", fg=COLOR_STATUS_INACTIVE)
+
+        self.root.after(500, self._update_macro_status)
+
+    def _load_group_to_editor(self):
+        for widget in self.scrollable_frame.winfo_children(): widget.destroy()
+        for widget in self.settings_grid.winfo_children(): widget.destroy()
+
+        if not self.current_group_name or self.current_group_name not in self.groups: return
+        data = self.groups[self.current_group_name]
+
+        full_hotkey = data.get('hotkey', '').lower()
+        parts = full_hotkey.split('+')
+        self.ctrl_var = tk.BooleanVar(value='ctrl' in parts)
+        self.shift_var = tk.BooleanVar(value='shift' in parts)
+        base_key = next((p for p in parts if p not in ['ctrl', 'shift', 'alt', 'lcontrol', 'rcontrol', 'lshift', 'rshift', 'lalt', 'ralt', 'alt gr', '']), '')
+
+        tk.Label(self.settings_grid, text="Hotkey Base:", font=FONT_MAIN, bg=COLOR_BG, fg=COLOR_TEXT_SUB).grid(row=0, column=0, sticky="w", padx=15, pady=5)
+
+        self.editor_hotkey_label = tk.Label(self.settings_grid, text=base_key, font=(FONT_FAMILY, 11, "bold"),
+                                          bg="#FFF3CD", fg="#856404", width=12, relief="flat", pady=5)
+        self.editor_hotkey_label.grid(row=0, column=1, sticky="w", pady=5)
+        self.editor_hotkey_label.bind("<Button-1>", self._start_hotkey_capture)
+
+        tk.Label(self.settings_grid, text="Modifiers:", font=FONT_MAIN, bg=COLOR_BG, fg=COLOR_TEXT_SUB).grid(row=1, column=0, sticky="w", padx=15, pady=5)
+        mod_frame = tk.Frame(self.settings_grid, bg=COLOR_BG)
+        mod_frame.grid(row=1, column=1, sticky="w")
+        tk.Checkbutton(mod_frame, text="Ctrl", variable=self.ctrl_var, bg=COLOR_BG, activebackground=COLOR_BG).pack(side="left", padx=(0, 10))
+        tk.Checkbutton(mod_frame, text="Shift", variable=self.shift_var, bg=COLOR_BG, activebackground=COLOR_BG).pack(side="left")
+
+        tk.Label(self.settings_grid, text="Switch Key:", font=FONT_MAIN, bg=COLOR_BG, fg=COLOR_TEXT_SUB).grid(row=2, column=0, sticky="w", padx=15, pady=10)
+        self.switch_key_var = tk.StringVar(value=data.get('switch_key', 'alt+esc'))
+        switch_menu = CustomOptionMenu(self.settings_grid, self.switch_key_var, ["alt+tab", "alt+esc"], width=15)
+        switch_menu.grid(row=2, column=1, sticky="w")
+
+        tk.Label(self.settings_grid, text="Loop Settings:", font=FONT_MAIN, bg=COLOR_BG, fg=COLOR_TEXT_SUB).grid(row=3, column=0, sticky="w", padx=15, pady=5)
+        self.loop_enabled_var = tk.BooleanVar(value=data.get('loop_enabled', False))
+        tk.Checkbutton(self.settings_grid, text="Loop", variable=self.loop_enabled_var, bg=COLOR_BG, activebackground=COLOR_BG).grid(row=3, column=1, sticky="w")
+
+        tk.Label(self.settings_grid, text="Loop Count:", font=FONT_MAIN, bg=COLOR_BG, fg=COLOR_TEXT_SUB).grid(row=4, column=0, sticky="w", padx=15, pady=5)
+        count_frame = tk.Frame(self.settings_grid, bg=COLOR_BG)
+        count_frame.grid(row=4, column=1, sticky="w")
+
+        self.loop_count_var = tk.Entry(count_frame, width=6, relief="solid", bd=1)
+        self.loop_count_var.insert(0, str(data.get('loop_count', 0)))
+        self.loop_count_var.pack(side="left")
+        tk.Label(count_frame, text="(0 = Infinite)", font=FONT_SUB, bg=COLOR_BG, fg="#888").pack(side="left", padx=5)
+
+        self.editor_step_entries = []
+        for i, step in enumerate(data['steps']):
+            delay_val = step.get('delay') if step.get('delay') else '1-2'
+            message = str(step.get('msg', ''))
+            self._add_step_row(i + 1, message, delay_val, step.get('multi_enabled', False), step.get('multi_mode', 'Sequential'))
+
+        self.editor_loaded = True
+
+    def _add_step_row(self, index, message="", delay="", multi_enabled=False, multi_mode="Sequential"):
+        if not delay: delay = '1-2'
+
+        row = tk.Frame(self.scrollable_frame, bg=COLOR_WHITE, pady=10)
+        row.pack(fill="x", padx=10)
+
+        if index > 1:
+            tk.Frame(self.scrollable_frame, height=1, bg="#F0F0F0").pack(fill="x", padx=20, before=row)
+
+        tk.Label(row, text=f"{index}.", font=(FONT_FAMILY, 14, "bold"), bg=COLOR_WHITE, fg="#CCC", width=3).pack(side="left", anchor="n")
+
+        content_grid = tk.Frame(row, bg=COLOR_WHITE)
+        content_grid.pack(side="left", fill="x", expand=True, padx=10)
+
+        tk.Label(content_grid, text="Message", font=FONT_SUB, bg=COLOR_WHITE, fg=COLOR_TEXT_SUB).grid(row=0, column=0, sticky="w")
+        tk.Label(content_grid, text="Delay Range", font=FONT_SUB, bg=COLOR_WHITE, fg=COLOR_TEXT_SUB).grid(row=0, column=1, sticky="w", padx=20)
+        tk.Label(content_grid, text="Multi Line", font=FONT_SUB, bg=COLOR_WHITE, fg=COLOR_TEXT_SUB).grid(row=0, column=2, sticky="w", padx=10)
+        tk.Label(content_grid, text="Delete", font=FONT_SUB, bg=COLOR_WHITE, fg=COLOR_TEXT_SUB).grid(row=0, column=3, sticky="w", padx=(30, 0))
+
+        msg_entry = tk.Text(content_grid, height=3, font=FONT_MAIN, relief="solid", bd=1, padx=5, pady=5)
+        msg_entry.delete("1.0", tk.END)
+        msg_entry.insert("1.0", message)
+        msg_entry.grid(row=1, column=0, sticky="w", rowspan=2, pady=(5, 0))
+        content_grid.grid_columnconfigure(0, weight=1)
+
+        delay_entry = tk.Entry(content_grid, width=10, relief="solid", bd=1)
+        delay_entry.insert(0, delay)
+        delay_entry.grid(row=1, column=1, sticky="w", padx=20, pady=(5, 5))
+
+        multi_var = tk.BooleanVar(value=multi_enabled)
+        tk.Checkbutton(content_grid, text="", variable=multi_var, bg=COLOR_WHITE).grid(row=1, column=2, sticky="w", padx=10, pady=(5, 5))
+
+        del_btn = tk.Button(content_grid, text="✕", font=("Arial", 16), fg="#FF6B6B", bg=COLOR_WHITE, bd=0,
+                            command=lambda r=row: self._remove_step_row(r), cursor="hand2")
+        del_btn.grid(row=1, column=3, sticky="w", padx=(30, 0))
+
+        mode_var = tk.StringVar(value=multi_mode)
+        mode_dropdown = CustomOptionMenu(content_grid, mode_var, ["Sequential", "Random"], width=12)
+        mode_dropdown.grid(row=2, column=2, sticky="w", padx=10)
+
+        self.editor_step_entries.append({
+            "frame": row, "msg": msg_entry, "delay": delay_entry,
+            "multi_enabled": multi_var, "multi_mode": mode_var
+        })
+        self._reindex_rows()
+
+    def _remove_step_row(self, row):
+        self.editor_step_entries = [e for e in self.editor_step_entries if e["frame"] != row]
+        row.destroy()
+        self._reindex_rows()
+
+    def _reindex_rows(self):
+        for i, entry in enumerate(self.editor_step_entries):
+            entry["frame"].winfo_children()[0].config(text=f"{i + 1}.")
+
+    def scroll_wheel(self, event):
+        self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+    # --- Group Management ---
+
+    def _update_dropdown(self):
+        self.group_dropdown.options = list(self.groups.keys())
+        self.group_dropdown._update_menu()
+
+    def _switch_group(self, new_name):
+        if not new_name: return
+
+        if self.editor_loaded:
+            self._save_editor_to_group()
+
+        self.current_group_name = new_name
+        self._load_group_to_editor()
+        self._setup_all_hotkeys()
+
+    def _add_group(self):
+        new_name = simpledialog.askstring("New", "Profile Name:")
+        if new_name and new_name not in self.groups:
+            self.groups[new_name] = {
+                "hotkey": "", "switch_key": "alt+esc", "loop_enabled": False, "loop_count": 0,
+                "steps": [{"msg": "", "delay": "1-2", "multi_enabled": False, "multi_mode": "Sequential"}]
+            }
+            self._update_dropdown()
+            self.group_var.set(new_name)
+            self._switch_group(new_name)
+
+    def _rename_group(self):
+        if not self.current_group_name: return
+        new = simpledialog.askstring("Rename", f"Rename '{self.current_group_name}' to:")
+        if new and new not in self.groups:
+            self.groups[new] = self.groups.pop(self.current_group_name)
+            self.current_group_name = new
+            self._update_dropdown()
+            self.group_var.set(new)
+            self._setup_all_hotkeys()
+
+    def _delete_group(self):
+        if len(self.groups) <= 1: return
+        if messagebox.askyesno("Delete", "Delete this profile?"):
+            del self.groups[self.current_group_name]
+            self.current_group_name = next(iter(self.groups))
+            self._update_dropdown()
+            self.group_var.set(self.current_group_name)
+            self._switch_group(self.current_group_name)
+
+    def _export_config(self):
+        self._save_config()
+        fn = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("JSON", "*.json")])
+        if fn: shutil.copyfile(STREAM_CONFIG_PATH, fn)
+
+    def _import_config(self):
+        fn = filedialog.askopenfilename(filetypes=[("JSON", "*.json")])
+        if fn:
+            try:
+                with open(fn, 'r', encoding='utf-8') as f:
+                    imported_data = json.load(f)
+            except json.JSONDecodeError as e:
+                messagebox.showerror("Error", f"Failed to import config: The file is not valid JSON. {e}")
+                return
+            except Exception as e:
+                messagebox.showerror("Error", f"An unexpected error occurred while reading the file: {e}")
+                return
+
+            try:
+                with open(STREAM_CONFIG_PATH, 'w', encoding='utf-8') as f:
+                    json.dump(imported_data, f, indent=4, ensure_ascii=False)
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to write imported file to config path: {e}")
+                return
+
+            self.groups = self._load_config()
+
+            if not self.groups:
+                messagebox.showerror("Import Failed", "The imported file was read, but the data structure is invalid or empty. Please check the file contents.")
+
+                self.groups = self._load_config()
+                if not self.groups:
+                    self._create_default_group()
+
+                self.current_group_name = next(iter(self.groups)) if self.groups else None
+                self._update_dropdown()
+                self.group_var.set(self.current_group_name)
+                self._load_group_to_editor()
+                self._setup_all_hotkeys()
+                return
+
+            self._save_config()
+            self._update_dropdown()
+
+            first_group_name = next(iter(self.groups))
+            self.group_var.set(first_group_name)
+            self.current_group_name = first_group_name
+            self._load_group_to_editor()
+            self._setup_all_hotkeys()
+
+            messagebox.showinfo("Success", "Configuration imported and active.")
+
+    def _save_editor_to_group(self):
+        if not self.current_group_name or not self.editor_hotkey_label:
+            return
+
+        new_steps = []
+        for e in self.editor_step_entries:
+            msg = e['msg'].get("1.0", "end-1c").strip()
+            delay_val = e['delay'].get()
+
+            if e['frame'].winfo_exists():
+                new_steps.append({
+                    "msg": msg,
+                    "delay": delay_val if delay_val else '1-2',
+                    "multi_enabled": e['multi_enabled'].get(),
+                    "multi_mode": e['multi_mode'].get()
+                })
+
+        mods = []
+        if self.ctrl_var.get(): mods.append('ctrl')
+        if self.shift_var.get(): mods.append('shift')
+        base = self.editor_hotkey_label.cget("text").strip().lower()
+        hk = "+".join(mods + ([base] if base else []))
+
+        try: lc = int(self.loop_count_var.get())
+        except: lc = 0
+
+        self.groups[self.current_group_name].update({
+            'hotkey': hk, 'switch_key': self.switch_key_var.get(),
+            'loop_enabled': self.loop_enabled_var.get(), 'loop_count': lc,
+            'steps': new_steps
+        })
+        self.step_iterators.clear()
+
+    # --- Hotkey and Execution ---
+
+    def _reload_and_save(self):
+        self.save_button.itemconfig(self.save_button.text_id, text="SAVING...")
+        self.status_label.config(text="Updating...", fg="orange")
+        threading.Thread(target=self._reload_thread, daemon=True).start()
+
+    def _reload_thread(self):
+        time.sleep(0.5)
+        self._save_editor_to_group()
+        self._save_config()
+        self._setup_all_hotkeys()
+        self.root.after(0, lambda: self.status_label.config(text="Saved & Active", fg="green"))
+        self.root.after(0, lambda: self.save_button.itemconfig(self.save_button.text_id, text="SAVE & RELOAD"))
+
+    def _start_hotkey_capture(self, e):
+        self.editor_hotkey_label.config(text="...", bg="#FFCCCC")
+        self.editor_hotkey_label.unbind("<Button-1>")
+        threading.Thread(target=self._cap_key, daemon=True).start()
+
+    def _cap_key(self):
+        try:
+            e = keyboard.read_event(suppress=True)
+            while e.event_type != keyboard.KEY_DOWN: e = keyboard.read_event(suppress=True)
+            k = e.name.lower()
+            if k in ['ctrl', 'shift', 'alt', 'lcontrol', 'rcontrol', 'lshift', 'rshift']: k = ""
+            self.root.after(0, lambda: self._upd_hk_lbl(k))
+        except: self.root.after(0, lambda: self._upd_hk_lbl(""))
+
+    def _upd_hk_lbl(self, k):
+        self.editor_hotkey_label.config(text=k, bg="#FFF3CD")
+        self.editor_hotkey_label.bind("<Button-1>", self._start_hotkey_capture)
+
+    def _setup_all_hotkeys(self):
+        with self.hotkey_lock:
+            # Remove only the hotkeys WE registered (don't touch the Chrome tab's
+            # abort hotkey or anything else registered globally).
+            for h in self._hotkey_handles:
+                try:
+                    keyboard.remove_hotkey(h)
+                except Exception:
+                    pass
+            self._hotkey_handles = []
+
+            new_running_events = {}
+            for n in self.groups.keys():
+                old_ev = self.running_events.get(n)
+                if old_ev and getattr(old_ev, 'active', False):
+                    new_running_events[n] = old_ev
+                else:
+                    new_running_events[n] = threading.Event()
+                    setattr(new_running_events[n], 'active', False)
+
+            self.running_events = new_running_events
+
+            for n, d in self.groups.items():
+                hotkey_to_register = d.get('hotkey')
+                if hotkey_to_register:
+                    try:
+                        h = keyboard.add_hotkey(hotkey_to_register, lambda n=n: self._handle_hk(n))
+                        self._hotkey_handles.append(h)
+                    except Exception as e:
+                        print(f"Error registering hotkey for {n}: {e}")
+
+    def _handle_hk(self, name):
+        ev = self.running_events.get(name)
+        if not ev: return
+
+        if getattr(ev, 'active', False):
+            ev.set()
+            self.root.after(0, lambda: self.status_label.config(text=f"Stopping {name}...", fg="red"))
+        else:
+            ev.clear()
+            setattr(ev, 'active', True)
+            threading.Thread(target=self._run_seq, args=(self.groups[name], name, ev)).start()
+
+    def _run_seq(self, data, name, ev):
+        self.root.after(0, lambda: self.status_label.config(text=f"Running: {name}", fg=COLOR_ACCENT))
+        steps = data['steps']
+        cnt = data.get('loop_count', 0)
+        loops = 1 if not data.get('loop_enabled') else (999999 if cnt == 0 else cnt)
+
+        cur = 0
+        while cur < loops and not ev.is_set():
+            for i, s in enumerate(steps):
+                if ev.is_set(): break
+                msg = self._get_msg(name, i, s)
+                if msg:
+                    keyboard.write(msg); time.sleep(0.05); keyboard.send("enter")
+                    d = self._parse_delay(s.get('delay', '1-2'))
+                    t = time.time()
+                    while time.time() - t < d:
+                        if ev.is_set(): break
+                        time.sleep(0.1)
+                if i < len(steps) - 1 and not ev.is_set():
+                    keyboard.send(data.get('switch_key', 'alt+esc')); time.sleep(0.2)
+            if data.get('loop_enabled') and not ev.is_set():
+                keyboard.send(data.get('switch_key', 'alt+esc')); time.sleep(0.2)
+            cur += 1
+
+        setattr(ev, 'active', False)
+        self.root.after(0, lambda: self.status_label.config(text="Ready", fg=COLOR_TEXT_SUB))
+
+    def _get_msg(self, name, idx, step):
+        lines = [l for l in step['msg'].split('\n') if l.strip()]
+        if not lines: return ""
+        if not step['multi_enabled']: return step['msg'].strip()
+
+        key = (name, idx)
+        if step['multi_mode'] == 'Random':
+            if key not in self.step_iterators: self.step_iterators[key] = self._shuf(lines)
+            return next(self.step_iterators[key])
+        else:
+            if key not in self.step_iterators: self.step_iterators[key] = itertools.cycle(lines)
+            return next(self.step_iterators[key])
+
+    def _shuf(self, d):
+        x = list(d)
+        while True:
+            random.shuffle(x)
+            for i in x: yield i
+
+    def _parse_delay(self, d):
+        try:
+            if '-' in d: a, b = map(float, d.split('-')); return random.uniform(a, b)
+            return float(d)
+        except: return 1.5
+
+    def save_all(self):
+        self._save_editor_to_group()
+        self._save_config()
+
+
+# ----------------------------------------------------------------------------
+# Combined tabbed application shell
+# ----------------------------------------------------------------------------
+
+class CombinedApp:
+    def __init__(self, root):
+        self.root = root
+        root.title(f"Stream Suite v{__version__}")
+        root.geometry("1040x880")
+        root.minsize(760, 620)
+        self.style = apply_mac_theme(root)
+
+        container = ttk.Frame(root)
+        container.pack(fill="both", expand=True)
+
+        self.notebook = ttk.Notebook(container)
+        self.notebook.pack(fill="both", expand=True, padx=16, pady=(12, 16))
+
+        self.chrome_frame = ttk.Frame(self.notebook)
+        self.typer_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.chrome_frame, text="  Chrome Sequencer  ")
+        self.notebook.add(self.typer_frame, text="  Typer  ")
+
+        self.chrome = ChromeTab(self.chrome_frame, root, on_done=self._focus_typer)
+        self.typer = TyperTab(self.typer_frame, root)
+
+        # Route the mouse wheel to whichever tab is active (avoids bind_all clashes).
+        root.bind_all("<MouseWheel>", self._on_wheel)
+
+        root.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.chrome._maybe_autorun()
+
+    def _focus_typer(self):
+        try:
+            self.notebook.select(self.typer_frame)
+        except Exception:
+            pass
+
+    def _on_wheel(self, event):
+        try:
+            idx = self.notebook.index(self.notebook.select())
+        except Exception:
+            return
+        if idx == 0 and self.chrome.scroll_canvas is not None:
+            self.chrome.scroll_canvas.yview_scroll(int(-event.delta / 120), "units")
+        elif idx == 1 and getattr(self.typer, "canvas", None) is not None:
+            self.typer.canvas.yview_scroll(int(-event.delta / 120), "units")
+
+    def _on_close(self):
+        try:
+            self.chrome._save_settings()
+        except Exception:
+            pass
+        try:
+            self.typer.save_all()
+        except Exception:
+            pass
+        try:
+            keyboard.unhook_all()
+        except Exception:
+            pass
+        os._exit(0)
+
+
+# ----------------------------------------------------------------------------
+# Self-update flow + entry point
+# ----------------------------------------------------------------------------
+
 def run_update_flow(root):
     """Check GitHub for a newer release; if found, download + relaunch.
     Returns True if an update was started (caller should exit)."""
@@ -889,7 +1745,7 @@ def run_update_flow(root):
     top.title("Updating")
     top.geometry("340x100")
     top.resizable(False, False)
-    tk.Label(top, text=f"Updating to {tag}...", font=("Segoe UI", 10, "bold")).pack(pady=(16, 6))
+    tk.Label(top, text=f"Updating to {tag}...", font=(FONT_FAMILY, 10, "bold")).pack(pady=(16, 6))
     status = tk.Label(top, text="Starting download...")
     status.pack()
     top.update()
@@ -921,14 +1777,11 @@ def main():
     root.withdraw()
     try:
         if run_update_flow(root):
-            # Force-exit immediately so the swap script's wait loop sees this
-            # PID disappear. A plain return can hang under --noconsole because
-            # the withdrawn root + update Toplevel keep the interpreter alive.
             os._exit(0)
     except Exception:
         pass
     root.deiconify()
-    App(root)
+    CombinedApp(root)
     root.mainloop()
 
 
