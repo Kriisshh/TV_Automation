@@ -1,0 +1,14 @@
+# Runtime-generated save files (live next to the app, per-machine)
+config.json
+stream_groups.json
+
+# Build artifacts
+build/
+dist/
+__pycache__/
+*.pyc
+*.spec
+
+# Updater leftovers
+*.exe.new
+chromeseq_update.log
