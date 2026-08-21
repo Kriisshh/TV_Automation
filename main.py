@@ -194,6 +194,37 @@ def chrome_window_handles():
     return handles
 
 
+def _work_area():
+    """Primary monitor work area (screen minus taskbar): (left, top, right, bottom)."""
+    import ctypes.wintypes
+    rect = ctypes.wintypes.RECT()
+    ctypes.windll.user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(rect), 0)  # SPI_GETWORKAREA
+    return rect.left, rect.top, rect.right, rect.bottom
+
+
+def tile_windows(hwnds):
+    """Arrange the given windows into a near-square grid across the work area."""
+    import math
+    n = len(hwnds)
+    if n == 0:
+        return
+    cols = math.ceil(math.sqrt(n))
+    rows = math.ceil(n / cols)
+    l, t, r, b = _work_area()
+    w = (r - l) // cols
+    h = (b - t) // rows
+    for i, hwnd in enumerate(hwnds):
+        x = l + (i % cols) * w
+        y = t + (i // cols) * h
+        try:
+            if win32gui.IsIconic(hwnd):
+                win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+            win32gui.SetWindowPos(hwnd, 0, x, y, w, h,
+                                  win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE)
+        except Exception:
+            pass
+
+
 def force_foreground(hwnd):
     """Reliably bring a window to the foreground and focus it."""
     try:
@@ -766,6 +797,9 @@ class ChromeTab:
         ptop = tk.Frame(pf.body, bg=MAC_CARD); ptop.pack(fill="x", pady=(0, 4))
         ttk.Button(ptop, text="All", width=6, command=lambda: self._set_all(True)).pack(side="left", padx=(0, 4))
         ttk.Button(ptop, text="None", width=6, command=lambda: self._set_all(False)).pack(side="left")
+        self.tile_grid = tk.BooleanVar(value=True)
+        ttk.Checkbutton(ptop, text="Tile windows in a grid", style="Card.TCheckbutton",
+                        variable=self.tile_grid).pack(side="left", padx=(14, 0))
         pwrap = tk.Frame(pf.body, bg=MAC_CARD); pwrap.pack(fill="both", expand=True)
         pcanvas = tk.Canvas(pwrap, height=150, highlightthickness=0, bg=MAC_CARD)
         pscroll = MiniScrollbar(pwrap, command=pcanvas.yview, bg=MAC_CARD)
@@ -835,6 +869,7 @@ class ChromeTab:
                 "pertab": self.d_pertab.get_state(),
             },
             "profiles": [d for d, v in self.profile_vars.items() if v.get()],
+            "tile_grid": self.tile_grid.get(),
             "final_keys_enabled": self.final_keys_enabled.get(),
             "final_key_delay": self.final_key_delay.get(),
             "final_keys": [r.get_key() for r in self.final_key_recorders if r.get_key()],
@@ -863,6 +898,8 @@ class ChromeTab:
             saved = set(cfg["profiles"])
             for directory, var in self.profile_vars.items():
                 var.set(directory in saved)
+        if "tile_grid" in cfg:
+            self.tile_grid.set(bool(cfg["tile_grid"]))
         if "final_keys_enabled" in cfg:
             self.final_keys_enabled.set(bool(cfg["final_keys_enabled"]))
         if "final_key_delay" in cfg:
@@ -976,7 +1013,7 @@ class ChromeTab:
         self.worker = threading.Thread(
             target=self._run_sequence,
             args=(chrome, url, selected, self.send_m.get(), self.send_c.get(),
-                  key_delay, final_keys, final_delay),
+                  key_delay, final_keys, final_delay, self.tile_grid.get()),
             daemon=True,
         )
         self.worker.start()
@@ -986,7 +1023,7 @@ class ChromeTab:
         self._log("Abort requested - stopping sequence.")
 
     def _run_sequence(self, chrome, url, profiles, send_m, send_c, key_delay,
-                      final_keys=None, final_delay=0.5):
+                      final_keys=None, final_delay=0.5, tile_grid=False):
         try:
             keys = []
             if send_m:
@@ -1014,6 +1051,11 @@ class ChromeTab:
                 else:
                     self._log(f"WARNING: window not detected for [{directory}]")
                 self._sleep(1.0)
+
+            if tile_grid and profile_hwnds:
+                self._log("Tiling windows in a grid...")
+                tile_windows(list(profile_hwnds.values()))
+                self._sleep(0.5)
 
             s = self.d_ext.seconds()
             self._log(f"Wait for extensions / VPN {s:.1f}s")
