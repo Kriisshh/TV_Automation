@@ -23,7 +23,7 @@ On the extension's options page (`chrome://extensions` → this extension →
 - **Check interval** — fixed minutes, or a random min–max range.
 - **Recovery reload interval** — seconds between reloads while recovering.
 
-Defaults: check every 2 min, reload every 30 s. Settings are per profile.
+Defaults: check every 2 min, reload every 10 s. Settings are per profile.
 
 ## Install (per Chrome profile)
 1. Open `chrome://extensions`.

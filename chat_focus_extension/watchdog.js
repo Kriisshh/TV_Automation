@@ -8,7 +8,7 @@
 (function () {
   "use strict";
 
-  const DEFAULTS = { checkMode: "fixed", fixedMin: 2, randMin: 2, randMax: 5, retrySecs: 30 };
+  const DEFAULTS = { checkMode: "fixed", fixedMin: 2, randMin: 2, randMax: 5, retrySecs: 10 };
   let opts = Object.assign({}, DEFAULTS);
   let lastTime = null;    // video.currentTime at the previous sample
   let triedPlay = false;  // did we already attempt to resume a paused video?

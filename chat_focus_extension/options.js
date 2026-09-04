@@ -9,7 +9,7 @@ function setMode(m) {
 }
 
 chrome.storage.local.get(
-  { checkMode: null, fixedMin: null, randMin: 2, randMax: 5, retrySecs: 30, checkMinutes: null },
+  { checkMode: null, fixedMin: null, randMin: 2, randMax: 5, retrySecs: 10, checkMinutes: null },
   (r) => {
     const mode = r.checkMode || "fixed";
     const fixed = (r.fixedMin != null ? r.fixedMin : (r.checkMinutes || 2));
