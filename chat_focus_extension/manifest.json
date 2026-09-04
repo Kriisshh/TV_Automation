@@ -1,9 +1,13 @@
 {
   "manifest_version": 3,
   "name": "Twitch Stream Helper",
-  "version": "1.1.0",
-  "description": "Keeps the Twitch chat input focused, and reloads the tab if the stream pauses, freezes, or gets stuck.",
+  "version": "1.2.0",
+  "description": "Keeps the Twitch chat input focused, auto-zooms Twitch to 75%, and reloads the tab if the stream pauses, freezes, or gets stuck.",
   "permissions": ["storage"],
+  "host_permissions": ["*://*.twitch.tv/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
   "options_ui": {
     "page": "options.html",
     "open_in_tab": false
