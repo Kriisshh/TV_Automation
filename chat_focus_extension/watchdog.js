@@ -120,4 +120,12 @@
       if (area === "local") loadOpts();  // next schedule uses the new timings
     });
   } catch (e) {}
+
+  // Keep audio on: if the player gets muted, unmute and set volume to 50%.
+  setInterval(() => {
+    const v = video();
+    if (v && v.muted) {
+      try { v.muted = false; v.volume = 0.5; } catch (e) {}
+    }
+  }, 3000);
 })();

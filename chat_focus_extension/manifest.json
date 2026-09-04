@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Twitch Stream Helper",
-  "version": "1.3.1",
+  "version": "1.4.0",
   "description": "Keeps the Twitch chat input focused, auto-zooms Twitch to 75%, and reloads the tab (on a fast retry cadence) if the stream pauses, freezes, or gets stuck.",
   "permissions": ["storage"],
   "host_permissions": ["*://*.twitch.tv/*"],
