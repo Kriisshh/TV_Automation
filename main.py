@@ -1374,10 +1374,11 @@ class ApplicationTab:
 # ----------------------------------------------------------------------------
 
 class MacroTab:
-    def __init__(self, parent, root, global_save=None):
+    def __init__(self, parent, root, global_save=None, pause_event=None):
         self.parent = parent
         self.root = root
         self.global_save = global_save
+        self.pause_event = pause_event  # set while playing so the Typer pauses
 
         self._events = []
         self._recording = False
@@ -1643,6 +1644,8 @@ class MacroTab:
             loops = 1
         self._stop_play.clear()
         self._playing = True
+        if self.pause_event:
+            self.pause_event.set()  # pause the Typer while the macro runs
         self._refresh_status()
         self._play_thread = threading.Thread(
             target=self._play_loop, args=(list(self._events), self.play_mode.get(), loops), daemon=True)
@@ -1694,10 +1697,14 @@ class MacroTab:
                     break
         finally:
             self._playing = False
+            if self.pause_event:
+                self.pause_event.clear()  # resume the Typer
             self._set_status(self._summary())
 
     def stop_all(self):
         self._stop_play.set()
+        if self.pause_event:
+            self.pause_event.clear()
         if self._recording:
             self._recording = False
             try:
@@ -1712,10 +1719,11 @@ class MacroTab:
 # ----------------------------------------------------------------------------
 
 class TyperTab:
-    def __init__(self, parent, root, global_save=None):
+    def __init__(self, parent, root, global_save=None, pause_event=None):
         self.parent = parent
         self.root = root
         self.global_save = global_save
+        self.pause_event = pause_event  # when set, hold typing (a macro is playing)
 
         self.current_group_name = None
         self.editor_loaded = False
@@ -2247,6 +2255,15 @@ class TyperTab:
             setattr(ev, 'active', True)
             threading.Thread(target=self._run_seq, args=(self.groups[name], name, ev)).start()
 
+    def _wait_while_paused(self, ev):
+        pe = self.pause_event
+        if not pe:
+            return
+        if pe.is_set():
+            self.root.after(0, lambda: self.status_label.config(text="Paused (macro running)...", fg=COLOR_STATUS_INACTIVE))
+            while pe.is_set() and not ev.is_set():
+                time.sleep(0.1)
+
     def _run_seq(self, data, name, ev):
         self.root.after(0, lambda: self.status_label.config(text=f"Running: {name}", fg=COLOR_ACCENT))
         steps = data['steps']
@@ -2256,6 +2273,8 @@ class TyperTab:
         cur = 0
         while cur < loops and not ev.is_set():
             for i, s in enumerate(steps):
+                if ev.is_set(): break
+                self._wait_while_paused(ev)   # hold while a macro is playing
                 if ev.is_set(): break
                 msg = self._get_msg(name, i, s)
                 if msg:
@@ -2335,9 +2354,12 @@ class CombinedApp:
         self._frames = {"chrome": self.chrome_frame, "typer": self.typer_frame,
                         "macro": self.macro_frame, "app": self.app_frame}
 
+        # Set while a macro is playing so the Typer pauses its typing.
+        self.macro_pause = threading.Event()
+
         self.chrome = ChromeTab(self.chrome_frame, root, global_save=self.save_all, on_done=self._focus_typer)
-        self.typer = TyperTab(self.typer_frame, root, global_save=self.save_all)
-        self.macro = MacroTab(self.macro_frame, root, global_save=self.save_all)
+        self.typer = TyperTab(self.typer_frame, root, global_save=self.save_all, pause_event=self.macro_pause)
+        self.macro = MacroTab(self.macro_frame, root, global_save=self.save_all, pause_event=self.macro_pause)
         self.app = ApplicationTab(self.app_frame, root, self.chrome, global_save=self.save_all)
 
         self.current = None
