@@ -1,12 +1,17 @@
 {
   "manifest_version": 3,
-  "name": "Twitch Chat Autofocus",
-  "version": "1.0.0",
-  "description": "Keeps the Twitch chat input focused at all times.",
+  "name": "Twitch Stream Helper",
+  "version": "1.1.0",
+  "description": "Keeps the Twitch chat input focused, and reloads the tab if the stream pauses, freezes, or gets stuck.",
+  "permissions": ["storage"],
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": false
+  },
   "content_scripts": [
     {
       "matches": ["*://*.twitch.tv/*"],
-      "js": ["content.js"],
+      "js": ["content.js", "watchdog.js"],
       "run_at": "document_idle",
       "all_frames": false
     }
