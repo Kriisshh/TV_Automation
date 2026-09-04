@@ -4,23 +4,45 @@
   <meta charset="utf-8">
   <title>Twitch Stream Helper</title>
   <style>
-    body { font-family: "Segoe UI", system-ui, sans-serif; padding: 16px; width: 300px; color: #1D1D1F; }
+    body { font-family: "Segoe UI", system-ui, sans-serif; padding: 16px; width: 360px; color: #1D1D1F; }
     h1 { font-size: 15px; color: #0D9488; margin: 0 0 12px; }
-    label { display: block; margin-bottom: 6px; font-weight: 600; font-size: 13px; }
-    input { width: 90px; padding: 6px; border: 1px solid #D2D2D7; border-radius: 6px; }
+    .row { margin: 8px 0; font-size: 13px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    label { font-weight: 600; }
+    input[type="number"] { width: 64px; padding: 5px; border: 1px solid #D2D2D7; border-radius: 6px; }
+    hr { border: 0; border-top: 1px solid #E3E3E6; margin: 14px 0; }
     button { margin-top: 12px; padding: 6px 16px; border: 0; border-radius: 6px;
              background: #0D9488; color: #fff; font-weight: 600; cursor: pointer; }
     #status { color: #2E9E5B; margin-left: 8px; font-size: 12px; }
-    .hint { color: #6E6E73; font-size: 12px; margin-top: 10px; line-height: 1.4; }
+    .hint { color: #6E6E73; font-size: 12px; margin-top: 12px; line-height: 1.4; }
   </style>
 </head>
 <body>
   <h1>Twitch Stream Helper</h1>
-  <label for="min">Health check every (minutes)</label>
-  <input id="min" type="number" min="0.25" step="0.25" value="2">
+
+  <div class="row">
+    <label><input type="radio" name="mode" value="fixed"> Check every</label>
+    <input id="fixedMin" type="number" min="0.25" step="0.25"> min
+  </div>
+  <div class="row">
+    <label><input type="radio" name="mode" value="random"> Check randomly between</label>
+    <input id="randMin" type="number" min="0.25" step="0.25"> and
+    <input id="randMax" type="number" min="0.25" step="0.25"> min
+  </div>
+
+  <hr>
+
+  <div class="row">
+    When paused / stuck, reload every
+    <input id="retry" type="number" min="5" step="5"> sec until it recovers
+  </div>
+
   <button id="save">Save</button><span id="status"></span>
-  <div class="hint">The watchdog reloads the tab if the video is paused (after a
-    failed resume), frozen, or stuck. Chat autofocus is always on.</div>
+
+  <div class="hint">The watchdog checks the video on the interval above. If it's
+    paused (after a failed resume), frozen, black, or errored, it reloads the tab
+    repeatedly on the fast interval until playback resumes. Chat autofocus and
+    75% zoom are always on.</div>
+
   <script src="options.js"></script>
 </body>
 </html>

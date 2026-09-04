@@ -10,17 +10,20 @@ libraries. One content script set scoped to `twitch.tv`.
 2. **Auto-zoom** — sets Twitch tabs to 75% zoom on load (edit `ZOOM` in
    `background.js` to change). For a global default on *all* sites, set
    `chrome://settings` → Appearance → Page zoom → 75% instead.
-3. **Stream watchdog** — every *N* minutes it checks the `<video>`:
-   - **Paused** → tries to resume; if still paused at the next check, reloads.
-   - **Frozen / black / stuck scene or ad** → if `currentTime` hasn't advanced
-     between checks, reloads.
-   - **No player / broken page** → reloads.
-   A reload-loop guard prevents reloading more than once per interval.
+3. **Stream watchdog** — two cadences:
+   - **Normal:** every *N* minutes (fixed, or a random value in a min–max range)
+     it checks the `<video>`.
+   - **Recovery:** as soon as it finds the video paused (after a failed resume),
+     frozen, black, errored, or gone, it reloads the tab every *R* seconds until
+     playback resumes, then returns to the normal cadence.
 
 ## Options
-Set the check interval on the extension's options page
-(`chrome://extensions` → this extension → **Details** → **Extension options**).
-Default is **2 minutes**.
+On the extension's options page (`chrome://extensions` → this extension →
+**Details** → **Extension options**) set:
+- **Check interval** — fixed minutes, or a random min–max range.
+- **Recovery reload interval** — seconds between reloads while recovering.
+
+Defaults: check every 2 min, reload every 30 s. Settings are per profile.
 
 ## Install (per Chrome profile)
 1. Open `chrome://extensions`.
