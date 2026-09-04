@@ -214,14 +214,9 @@ def tile_windows(hwnds):
     n = len(hwnds)
     if n == 0:
         return
-    l, t, r, b = _work_area()
-    # Chrome refuses to make a window narrower than ~500px; if a cell would be
-    # smaller it force-widens the window and the right column spills off-screen.
-    # Cap the column count so each cell stays at least this wide.
-    MIN_CELL_W = 500
-    max_cols = max(1, (r - l) // MIN_CELL_W)
-    cols = min(math.ceil(math.sqrt(n)), max_cols)
+    cols = math.ceil(math.sqrt(n))
     rows = math.ceil(n / cols)
+    l, t, r, b = _work_area()
     w = (r - l) // cols
     h = (b - t) // rows
     for i, hwnd in enumerate(hwnds):
