@@ -1437,6 +1437,20 @@ class MacroTab:
         ttk.Label(hc.body, text="Records into the selected recording on the right (toggle).",
                   style="CardSub.TLabel").pack(anchor="w", pady=(6, 0))
 
+        # Play all (one hotkey)
+        gc = self._card(left, "Play all (one hotkey)")
+        gc.pack(fill="x", pady=(0, 12))
+        g1 = tk.Frame(gc.body, bg=MAC_CARD); g1.pack(fill="x")
+        self.play_all_hotkey_entry = ttk.Entry(g1, width=18)
+        self.play_all_hotkey_entry.insert(0, "ctrl+shift+g")
+        self.play_all_hotkey_entry.pack(side="left")
+        ttk.Button(g1, text="Set", width=6, command=self._apply_hotkeys).pack(side="left", padx=6)
+        ttk.Label(gc.body, text="Plays every checked recording in order; press again to stop.",
+                  style="CardSub.TLabel").pack(anchor="w", pady=(6, 0))
+
+        self.delay_after = DelayInput(left, "Delay after each macro", "1", "1", "3")
+        self.delay_after.pack(fill="x", pady=(0, 12))
+
         # Capture
         cc = self._card(left, "Capture")
         cc.pack(fill="x", pady=(0, 12))
@@ -1503,29 +1517,33 @@ class MacroTab:
             self.sel.set(0)
         # column headers
         hdr = tk.Frame(self.list_inner, bg=MAC_CARD); hdr.pack(fill="x")
-        ttk.Label(hdr, text="  Name", style="CardSub.TLabel", width=16).pack(side="left")
-        ttk.Label(hdr, text="Play hotkey", style="CardSub.TLabel", width=14).pack(side="left")
+        ttk.Label(hdr, text="On  Rec", style="CardSub.TLabel", width=8).pack(side="left")
+        ttk.Label(hdr, text="Name", style="CardSub.TLabel", width=12).pack(side="left")
+        ttk.Label(hdr, text="Play hotkey", style="CardSub.TLabel", width=12).pack(side="left")
         for i, rec in enumerate(self.recordings):
             row = tk.Frame(self.list_inner, bg=MAC_CARD)
             row.pack(fill="x", pady=3)
+            en_var = tk.BooleanVar(value=rec.get("enabled", True))
+            ttk.Checkbutton(row, variable=en_var, style="Card.TCheckbutton").pack(side="left")
             ttk.Radiobutton(row, variable=self.sel, value=i, style="Card.TRadiobutton").pack(side="left")
             name_var = tk.StringVar(value=rec.get("name", f"Recording {i + 1}"))
-            ttk.Entry(row, textvariable=name_var, width=13).pack(side="left", padx=(0, 6))
+            ttk.Entry(row, textvariable=name_var, width=11).pack(side="left", padx=(0, 6))
             hk_var = tk.StringVar(value=rec.get("hotkey", ""))
-            ttk.Entry(row, textvariable=hk_var, width=13).pack(side="left", padx=(0, 6))
-            ttk.Label(row, text=f"{len(rec.get('events', []))} ev", style="CardSub.TLabel", width=7).pack(side="left")
-            RoundedButton(row, 58, 28, "Play", command=lambda i=i: self._toggle_play_index(i), radius=8,
+            ttk.Entry(row, textvariable=hk_var, width=11).pack(side="left", padx=(0, 6))
+            ttk.Label(row, text=f"{len(rec.get('events', []))}", style="CardSub.TLabel", width=4).pack(side="left")
+            RoundedButton(row, 52, 28, "Play", command=lambda i=i: self._toggle_play_index(i), radius=8,
                           bg_color=MAC_ACCENT, hover_color=MAC_ACCENT_HOVER, text_color="#FFFFFF",
                           canvas_bg=MAC_CARD).pack(side="left", padx=(4, 4))
             RoundedButton(row, 30, 28, "✕", command=lambda i=i: self._delete(i), radius=8,
                           canvas_bg=MAC_CARD).pack(side="left")
-            self._rows.append({"name": name_var, "hotkey": hk_var})
+            self._rows.append({"name": name_var, "hotkey": hk_var, "enabled": en_var})
 
     def _sync_model(self):
         for i, row in enumerate(self._rows):
             if i < len(self.recordings):
                 self.recordings[i]["name"] = row["name"].get().strip() or f"Recording {i + 1}"
                 self.recordings[i]["hotkey"] = row["hotkey"].get().strip().lower()
+                self.recordings[i]["enabled"] = row["enabled"].get()
 
     def _add_recording(self):
         self._sync_model()
@@ -1551,6 +1569,8 @@ class MacroTab:
     def _collect_settings(self):
         return {
             "macro_record_hotkey": self.rec_hotkey_entry.get(),
+            "macro_play_all_hotkey": self.play_all_hotkey_entry.get(),
+            "macro_delay_after": self.delay_after.get_state(),
             "macro_cap_move": self.cap_move.get(),
             "macro_cap_click": self.cap_click.get(),
             "macro_cap_scroll": self.cap_scroll.get(),
@@ -1562,6 +1582,10 @@ class MacroTab:
         cfg = load_config()
         if cfg.get("macro_record_hotkey"):
             self.rec_hotkey_entry.delete(0, "end"); self.rec_hotkey_entry.insert(0, cfg["macro_record_hotkey"])
+        if cfg.get("macro_play_all_hotkey"):
+            self.play_all_hotkey_entry.delete(0, "end"); self.play_all_hotkey_entry.insert(0, cfg["macro_play_all_hotkey"])
+        if isinstance(cfg.get("macro_delay_after"), dict):
+            self.delay_after.set_state(cfg["macro_delay_after"])
         if "macro_cap_move" in cfg:
             self.cap_move.set(bool(cfg["macro_cap_move"]))
         if "macro_cap_click" in cfg:
@@ -1597,6 +1621,7 @@ class MacroTab:
         for i, rec in enumerate(self.recordings):
             rec.setdefault("name", f"Recording {i + 1}")
             rec.setdefault("hotkey", "")
+            rec.setdefault("enabled", True)
             rec.setdefault("events", [])
 
     def _save_clicked(self):
@@ -1634,6 +1659,12 @@ class MacroTab:
                 self._hk_handles.append(keyboard.add_hotkey(combo, self._hk_record))
             except Exception:
                 pass
+        allc = self.play_all_hotkey_entry.get().strip().lower()
+        if allc:
+            try:
+                self._hk_handles.append(keyboard.add_hotkey(allc, self._hk_play_all))
+            except Exception:
+                pass
         for i, rec in enumerate(self.recordings):
             hk = rec.get("hotkey", "").strip().lower()
             if hk:
@@ -1652,6 +1683,9 @@ class MacroTab:
 
     def _hk_play(self, i):
         self.root.after(0, lambda: self._toggle_play_index(i))
+
+    def _hk_play_all(self):
+        self.root.after(0, self.toggle_play_all)
 
     # ---- record ----
     def toggle_record(self):
@@ -1734,6 +1768,59 @@ class MacroTab:
         self._play_thread = threading.Thread(
             target=self._play_loop, args=(events, self.play_mode.get(), loops), daemon=True)
         self._play_thread.start()
+
+    def toggle_play_all(self):
+        if not _HAS_PYNPUT or self._recording:
+            return
+        if self._playing:
+            self._stop_play.set()   # a macro (single or all) is running -> pause/stop
+            return
+        self._sync_model()
+        seq = [(rec["name"], list(rec.get("events", [])))
+               for rec in self.recordings if rec.get("enabled", True) and rec.get("events")]
+        if not seq:
+            self._set_status("No checked recordings with events.")
+            return
+        self._stop_play.clear()
+        self._playing = True
+        self._play_index = -1
+        if self.pause_event:
+            self.pause_event.set()
+        self._play_thread = threading.Thread(target=self._play_all_loop, args=(seq,), daemon=True)
+        self._play_thread.start()
+
+    def _play_all_loop(self, seq):
+        try:
+            for idx, (name, events) in enumerate(seq):
+                if self._stop_play.is_set():
+                    break
+                self._set_status(f"Playing '{name}' ({idx + 1}/{len(seq)})...")
+                start = time.perf_counter()
+                for ev in events:
+                    if not self._wait(ev.get("t", 0), start):
+                        break
+                    try:
+                        self._do_event(ev)
+                    except Exception:
+                        pass
+                if self._stop_play.is_set() or idx >= len(seq) - 1:
+                    continue
+                # fixed/random delay after each macro (except the last)
+                try:
+                    d = self.delay_after.seconds()
+                except Exception:
+                    d = 0.0
+                t = time.perf_counter()
+                while time.perf_counter() - t < d:
+                    if self._stop_play.is_set():
+                        break
+                    time.sleep(0.05)
+        finally:
+            self._playing = False
+            self._play_index = -1
+            if self.pause_event:
+                self.pause_event.clear()
+            self._set_status(self._summary())
 
     def _btn(self, name):
         try:
