@@ -66,6 +66,11 @@ CONFIG_PATH = os.path.join(app_dir(), "config.json")               # Chrome + ap
 STREAM_CONFIG_PATH = os.path.join(app_dir(), "stream_groups.json")  # Typer
 
 
+def extension_dir():
+    """Unpacked helper extension, expected next to the app."""
+    return os.path.join(app_dir(), "chat_focus_extension")
+
+
 def load_config():
     try:
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
@@ -811,6 +816,9 @@ class ChromeTab:
         self.tile_grid = tk.BooleanVar(value=True)
         ttk.Checkbutton(ptop, text="Tile windows in a grid", style="Card.TCheckbutton",
                         variable=self.tile_grid).pack(side="left", padx=(14, 0))
+        self.load_ext = tk.BooleanVar(value=True)
+        ttk.Checkbutton(ptop, text="Load helper extension", style="Card.TCheckbutton",
+                        variable=self.load_ext).pack(side="left", padx=(14, 0))
         pwrap = tk.Frame(pf.body, bg=MAC_CARD); pwrap.pack(fill="both", expand=True)
         pcanvas = tk.Canvas(pwrap, height=150, highlightthickness=0, bg=MAC_CARD)
         pscroll = MiniScrollbar(pwrap, command=pcanvas.yview, bg=MAC_CARD)
@@ -886,6 +894,7 @@ class ChromeTab:
             },
             "profiles": [d for d, v in self.profile_vars.items() if v.get()],
             "tile_grid": self.tile_grid.get(),
+            "load_extension": self.load_ext.get(),
             "final_keys_enabled": self.final_keys_enabled.get(),
             "final_key_delay": self.final_key_delay.get(),
             "final_keys": [r.get_key() for r in self.final_key_recorders if r.get_key()],
@@ -921,6 +930,8 @@ class ChromeTab:
                 var.set(directory in saved)
         if "tile_grid" in cfg:
             self.tile_grid.set(bool(cfg["tile_grid"]))
+        if "load_extension" in cfg:
+            self.load_ext.set(bool(cfg["load_extension"]))
         if "final_keys_enabled" in cfg:
             self.final_keys_enabled.set(bool(cfg["final_keys_enabled"]))
         if "final_key_delay" in cfg:
@@ -1045,7 +1056,8 @@ class ChromeTab:
         self.worker = threading.Thread(
             target=self._run_sequence,
             args=(chrome, urls, selected, self.send_m.get(), self.send_c.get(),
-                  key_delay, final_keys, final_delay, self.tile_grid.get()),
+                  key_delay, final_keys, final_delay, self.tile_grid.get(),
+                  self.load_ext.get()),
             daemon=True,
         )
         self.worker.start()
@@ -1055,7 +1067,7 @@ class ChromeTab:
         self._log("Abort requested - stopping sequence.")
 
     def _run_sequence(self, chrome, urls, profiles, send_m, send_c, key_delay,
-                      final_keys=None, final_delay=0.5, tile_grid=False):
+                      final_keys=None, final_delay=0.5, tile_grid=False, load_ext=False):
         try:
             keys = []
             if send_m:
@@ -1064,6 +1076,17 @@ class ChromeTab:
                 keys.append("c")
 
             urls = list(urls) if urls else [""]
+
+            # Optionally load the unpacked helper extension. Note: Chrome only
+            # honors this when it starts the browser process (i.e. that profile's
+            # Chrome isn't already running); the first window we open sets it.
+            ext_args = []
+            if load_ext:
+                ep = extension_dir()
+                if os.path.isdir(ep):
+                    ext_args = [f"--load-extension={ep}"]
+                else:
+                    self._log("Helper extension folder not found next to the app.")
 
             s = self.d_initial.seconds()
             self._log(f"Initial wait {s:.1f}s")
@@ -1079,9 +1102,10 @@ class ChromeTab:
                 # 1) Open one profile window.
                 self._log(f"[{idx + 1}/{total}] Opening [{directory}]...")
                 before = chrome_window_handles()
-                subprocess.Popen([
-                    chrome, f"--profile-directory={directory}", "--new-window", "about:blank",
-                ])
+                subprocess.Popen(
+                    [chrome, f"--profile-directory={directory}", "--new-window"]
+                    + ext_args + ["about:blank"]
+                )
                 hwnd = self._wait_for_new_window(before, timeout=15)
                 if not hwnd:
                     self._log(f"WARNING: window not detected for [{directory}], skipping")
