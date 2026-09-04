@@ -1,3 +1,4 @@
 keyboard
 pywin32
+pynput
 pyinstaller

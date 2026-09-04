@@ -49,6 +49,13 @@ import win32process
 import ctypes
 import winreg
 
+try:
+    from pynput import mouse as pynput_mouse
+    _HAS_PYNPUT = True
+except Exception:
+    pynput_mouse = None
+    _HAS_PYNPUT = False
+
 from updater import __version__, check_for_update, download_and_apply
 
 
@@ -64,6 +71,7 @@ def app_dir():
 
 CONFIG_PATH = os.path.join(app_dir(), "config.json")               # Chrome + app
 STREAM_CONFIG_PATH = os.path.join(app_dir(), "stream_groups.json")  # Typer
+MACRO_PATH = os.path.join(app_dir(), "macro_recording.json")        # Macros tab
 
 
 def extension_dir():
@@ -1362,6 +1370,344 @@ class ApplicationTab:
 
 
 # ----------------------------------------------------------------------------
+# TAB 4 - Macros (record mouse movement/clicks/scroll on a hotkey; replay it)
+# ----------------------------------------------------------------------------
+
+class MacroTab:
+    def __init__(self, parent, root, global_save=None):
+        self.parent = parent
+        self.root = root
+        self.global_save = global_save
+
+        self._events = []
+        self._recording = False
+        self._playing = False
+        self._listener = None
+        self._rec_start = 0.0
+        self._last_move = 0.0
+        self._play_thread = None
+        self._stop_play = threading.Event()
+        self._hk_handles = []
+        self._ctrl = pynput_mouse.Controller() if _HAS_PYNPUT else None
+
+        self._build_ui()
+        self._load_recording()
+        self._load_settings()
+        self._register_hotkeys()
+        self._refresh_status()
+
+    def _card(self, parent, title):
+        return make_card(parent, title)
+
+    def _build_ui(self):
+        body = ttk.Frame(self.parent, padding=(18, 16))
+        body.pack(fill="both", expand=True)
+
+        ttk.Label(body, text="Macros", style="H1.TLabel").pack(anchor="w")
+        ttk.Label(body, text="Record your mouse and replay it with a hotkey.",
+                  style="Sub.TLabel").pack(anchor="w", pady=(2, 14))
+
+        if not _HAS_PYNPUT:
+            warn = self._card(body, "Missing dependency")
+            warn.pack(fill="x", pady=(0, 12))
+            ttk.Label(warn.body, text="The 'pynput' package is required. Install it with:  pip install pynput",
+                      style="Card.TLabel").pack(anchor="w")
+
+        grid = ttk.Frame(body)
+        grid.pack(fill="x")
+        grid.columnconfigure(0, weight=1, uniform="col")
+        grid.columnconfigure(1, weight=1, uniform="col")
+        left = ttk.Frame(grid); left.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+        right = ttk.Frame(grid); right.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
+
+        # Hotkeys
+        hc = self._card(left, "Hotkeys")
+        hc.pack(fill="x", pady=(0, 12))
+        r1 = tk.Frame(hc.body, bg=MAC_CARD); r1.pack(fill="x", pady=(0, 4))
+        ttk.Label(r1, text="Record (toggle)", style="Card.TLabel", width=15).pack(side="left")
+        self.rec_hotkey_entry = ttk.Entry(r1, width=18)
+        self.rec_hotkey_entry.insert(0, "ctrl+shift+r")
+        self.rec_hotkey_entry.pack(side="left", padx=6)
+        r2 = tk.Frame(hc.body, bg=MAC_CARD); r2.pack(fill="x")
+        ttk.Label(r2, text="Play (toggle)", style="Card.TLabel", width=15).pack(side="left")
+        self.play_hotkey_entry = ttk.Entry(r2, width=18)
+        self.play_hotkey_entry.insert(0, "ctrl+shift+p")
+        self.play_hotkey_entry.pack(side="left", padx=6)
+        ttk.Button(hc.body, text="Set hotkeys", command=self._apply_hotkeys).pack(anchor="w", pady=(8, 0))
+
+        # Capture
+        cc = self._card(left, "Capture")
+        cc.pack(fill="x")
+        self.cap_move = tk.BooleanVar(value=True)
+        self.cap_click = tk.BooleanVar(value=True)
+        self.cap_scroll = tk.BooleanVar(value=True)
+        ttk.Checkbutton(cc.body, text="Movement", style="Card.TCheckbutton", variable=self.cap_move).pack(anchor="w")
+        ttk.Checkbutton(cc.body, text="Clicks", style="Card.TCheckbutton", variable=self.cap_click).pack(anchor="w")
+        ttk.Checkbutton(cc.body, text="Scroll", style="Card.TCheckbutton", variable=self.cap_scroll).pack(anchor="w")
+
+        # Playback
+        pc = self._card(right, "Playback")
+        pc.pack(fill="x", pady=(0, 12))
+        self.play_mode = tk.StringVar(value="once")
+        ttk.Radiobutton(pc.body, text="Once per press", style="Card.TRadiobutton",
+                        variable=self.play_mode, value="once").pack(anchor="w")
+        lr = tk.Frame(pc.body, bg=MAC_CARD); lr.pack(anchor="w", fill="x")
+        ttk.Radiobutton(lr, text="Repeat", style="Card.TRadiobutton",
+                        variable=self.play_mode, value="loops").pack(side="left")
+        self.loops_entry = ttk.Entry(lr, width=5)
+        self.loops_entry.insert(0, "3")
+        self.loops_entry.pack(side="left", padx=6)
+        ttk.Label(lr, text="times", style="CardSub.TLabel").pack(side="left")
+        ttk.Radiobutton(pc.body, text="Loop until stopped", style="Card.TRadiobutton",
+                        variable=self.play_mode, value="until").pack(anchor="w")
+
+        # Recording controls
+        rc = self._card(right, "Recording")
+        rc.pack(fill="x")
+        self.macro_status = ttk.Label(rc.body, text="", style="Card.TLabel")
+        self.macro_status.pack(anchor="w", pady=(0, 8))
+        btns = tk.Frame(rc.body, bg=MAC_CARD); btns.pack(anchor="w")
+        self.rec_btn = RoundedButton(btns, 90, 34, "Record", command=self.toggle_record, radius=9,
+                                     bg_color=MAC_DANGER, hover_color=MAC_DANGER_HOVER, text_color="#FFFFFF")
+        self.rec_btn.pack(side="left")
+        self.play_btn = RoundedButton(btns, 90, 34, "Play", command=self.toggle_play, radius=9,
+                                      bg_color=MAC_ACCENT, hover_color=MAC_ACCENT_HOVER, text_color="#FFFFFF")
+        self.play_btn.pack(side="left", padx=8)
+        RoundedButton(btns, 80, 34, "Clear", command=self._clear, radius=9).pack(side="left")
+
+        # Save bar
+        bar = ttk.Frame(body)
+        bar.pack(fill="x", pady=(14, 0))
+        self.status_label = ttk.Label(bar, text="", style="Sub.TLabel")
+        self.status_label.pack(side="left")
+        RoundedButton(bar, 120, 40, "Save", command=self._save_clicked, radius=10,
+                      bg_color=MAC_CONTROL_MUTED, hover_color=MAC_CONTROL_HOVER, text_color=MAC_TEXT).pack(side="right")
+
+    # ---- settings ----
+    def _collect_settings(self):
+        return {
+            "macro_record_hotkey": self.rec_hotkey_entry.get(),
+            "macro_play_hotkey": self.play_hotkey_entry.get(),
+            "macro_cap_move": self.cap_move.get(),
+            "macro_cap_click": self.cap_click.get(),
+            "macro_cap_scroll": self.cap_scroll.get(),
+            "macro_play_mode": self.play_mode.get(),
+            "macro_play_loops": self.loops_entry.get(),
+        }
+
+    def _load_settings(self):
+        cfg = load_config()
+        if cfg.get("macro_record_hotkey"):
+            self.rec_hotkey_entry.delete(0, "end"); self.rec_hotkey_entry.insert(0, cfg["macro_record_hotkey"])
+        if cfg.get("macro_play_hotkey"):
+            self.play_hotkey_entry.delete(0, "end"); self.play_hotkey_entry.insert(0, cfg["macro_play_hotkey"])
+        if "macro_cap_move" in cfg:
+            self.cap_move.set(bool(cfg["macro_cap_move"]))
+        if "macro_cap_click" in cfg:
+            self.cap_click.set(bool(cfg["macro_cap_click"]))
+        if "macro_cap_scroll" in cfg:
+            self.cap_scroll.set(bool(cfg["macro_cap_scroll"]))
+        if cfg.get("macro_play_mode"):
+            self.play_mode.set(cfg["macro_play_mode"])
+        if "macro_play_loops" in cfg:
+            self.loops_entry.delete(0, "end"); self.loops_entry.insert(0, str(cfg["macro_play_loops"]))
+
+    def _save_clicked(self):
+        if self.global_save:
+            self.global_save()
+
+    # ---- recording persistence ----
+    def _save_recording(self):
+        try:
+            with open(MACRO_PATH, "w", encoding="utf-8") as f:
+                json.dump({"events": self._events}, f)
+        except Exception:
+            pass
+
+    def _load_recording(self):
+        try:
+            with open(MACRO_PATH, "r", encoding="utf-8") as f:
+                self._events = json.load(f).get("events", [])
+        except Exception:
+            self._events = []
+
+    def _clear(self):
+        if self._recording or self._playing:
+            return
+        self._events = []
+        self._save_recording()
+        self._refresh_status()
+
+    # ---- status ----
+    def _summary(self):
+        if not self._events:
+            return "No recording."
+        dur = self._events[-1].get("t", 0)
+        return f"{len(self._events)} events, {dur:.1f}s recorded."
+
+    def _refresh_status(self):
+        if self._recording:
+            txt = "Recording... press the record hotkey/button to stop."
+        elif self._playing:
+            txt = "Playing..."
+        else:
+            txt = self._summary()
+        self.macro_status.config(text=txt)
+
+    def _set_status(self, txt):
+        self.root.after(0, lambda: self.macro_status.config(text=txt))
+
+    # ---- hotkeys ----
+    def _register_hotkeys(self):
+        for h in self._hk_handles:
+            try:
+                keyboard.remove_hotkey(h)
+            except Exception:
+                pass
+        self._hk_handles = []
+        for combo, fn in ((self.rec_hotkey_entry.get().strip().lower(), self._hk_record),
+                          (self.play_hotkey_entry.get().strip().lower(), self._hk_play)):
+            if combo:
+                try:
+                    self._hk_handles.append(keyboard.add_hotkey(combo, fn))
+                except Exception:
+                    pass
+
+    def _apply_hotkeys(self):
+        self._register_hotkeys()
+        self.status_label.config(text="Hotkeys set")
+        self.root.after(2000, lambda: self.status_label.config(text=""))
+
+    def _hk_record(self):
+        self.root.after(0, self.toggle_record)
+
+    def _hk_play(self):
+        self.root.after(0, self.toggle_play)
+
+    # ---- record ----
+    def toggle_record(self):
+        if not _HAS_PYNPUT or self._playing:
+            return
+        if not self._recording:
+            self._events = []
+            self._rec_start = time.perf_counter()
+            self._last_move = 0.0
+            self._recording = True
+            self._listener = pynput_mouse.Listener(
+                on_move=self._on_move, on_click=self._on_click, on_scroll=self._on_scroll)
+            self._listener.start()
+        else:
+            self._recording = False
+            try:
+                self._listener.stop()
+            except Exception:
+                pass
+            self._listener = None
+            self._save_recording()
+        self._refresh_status()
+
+    def _on_move(self, x, y):
+        if not self._recording or not self.cap_move.get():
+            return
+        now = time.perf_counter() - self._rec_start
+        if now - self._last_move < 0.008:  # light throttle
+            return
+        self._last_move = now
+        self._events.append({"t": now, "type": "move", "x": x, "y": y})
+
+    def _on_click(self, x, y, button, pressed):
+        if not self._recording or not self.cap_click.get():
+            return
+        self._events.append({"t": time.perf_counter() - self._rec_start, "type": "click",
+                             "x": x, "y": y, "button": button.name, "pressed": bool(pressed)})
+
+    def _on_scroll(self, x, y, dx, dy):
+        if not self._recording or not self.cap_scroll.get():
+            return
+        self._events.append({"t": time.perf_counter() - self._rec_start, "type": "scroll",
+                             "x": x, "y": y, "dx": dx, "dy": dy})
+
+    # ---- play ----
+    def toggle_play(self):
+        if not _HAS_PYNPUT or self._recording:
+            return
+        if self._playing:
+            self._stop_play.set()
+            return
+        if not self._events:
+            self._set_status("Nothing recorded yet.")
+            return
+        try:
+            loops = max(1, int(self.loops_entry.get()))
+        except ValueError:
+            loops = 1
+        self._stop_play.clear()
+        self._playing = True
+        self._refresh_status()
+        self._play_thread = threading.Thread(
+            target=self._play_loop, args=(list(self._events), self.play_mode.get(), loops), daemon=True)
+        self._play_thread.start()
+
+    def _btn(self, name):
+        try:
+            return getattr(pynput_mouse.Button, name)
+        except Exception:
+            return pynput_mouse.Button.left
+
+    def _do_event(self, ev):
+        t = ev.get("type")
+        if t == "move":
+            self._ctrl.position = (ev["x"], ev["y"])
+        elif t == "click":
+            self._ctrl.position = (ev["x"], ev["y"])
+            btn = self._btn(ev.get("button", "left"))
+            if ev.get("pressed"):
+                self._ctrl.press(btn)
+            else:
+                self._ctrl.release(btn)
+        elif t == "scroll":
+            self._ctrl.position = (ev["x"], ev["y"])
+            self._ctrl.scroll(ev.get("dx", 0), ev.get("dy", 0))
+
+    def _wait(self, target_t, start):
+        while not self._stop_play.is_set():
+            now = time.perf_counter() - start
+            if now >= target_t:
+                return True
+            time.sleep(min(0.005, max(0.0, target_t - now)))
+        return False
+
+    def _play_loop(self, events, mode, loops):
+        try:
+            n = 0
+            while not self._stop_play.is_set():
+                start = time.perf_counter()
+                for ev in events:
+                    if not self._wait(ev.get("t", 0), start):
+                        break
+                    try:
+                        self._do_event(ev)
+                    except Exception:
+                        pass
+                n += 1
+                if mode == "once" or (mode == "loops" and n >= loops):
+                    break
+        finally:
+            self._playing = False
+            self._set_status(self._summary())
+
+    def stop_all(self):
+        self._stop_play.set()
+        if self._recording:
+            self._recording = False
+            try:
+                if self._listener:
+                    self._listener.stop()
+            except Exception:
+                pass
+
+
+# ----------------------------------------------------------------------------
 # TAB 2 - Typer (adapted from TyperV9)
 # ----------------------------------------------------------------------------
 
@@ -1973,7 +2319,8 @@ class CombinedApp:
         tabbar = tk.Frame(container, bg=MAC_BG)
         tabbar.pack(fill="x", pady=(0, 10))
         self.pills = {}
-        for key, label in (("chrome", "Chrome Sequencer"), ("typer", "Typer"), ("app", "Application")):
+        for key, label in (("chrome", "Chrome Sequencer"), ("typer", "Typer"),
+                           ("macro", "Macros"), ("app", "Application")):
             p = PillTab(tabbar, label, lambda k=key: self.select(k))
             p.pack(side="left", padx=(0, 8))
             self.pills[key] = p
@@ -1983,11 +2330,14 @@ class CombinedApp:
         content.pack(fill="both", expand=True)
         self.chrome_frame = tk.Frame(content, bg=MAC_BG)
         self.typer_frame = tk.Frame(content, bg=MAC_BG)
+        self.macro_frame = tk.Frame(content, bg=MAC_BG)
         self.app_frame = tk.Frame(content, bg=MAC_BG)
-        self._frames = {"chrome": self.chrome_frame, "typer": self.typer_frame, "app": self.app_frame}
+        self._frames = {"chrome": self.chrome_frame, "typer": self.typer_frame,
+                        "macro": self.macro_frame, "app": self.app_frame}
 
         self.chrome = ChromeTab(self.chrome_frame, root, global_save=self.save_all, on_done=self._focus_typer)
         self.typer = TyperTab(self.typer_frame, root, global_save=self.save_all)
+        self.macro = MacroTab(self.macro_frame, root, global_save=self.save_all)
         self.app = ApplicationTab(self.app_frame, root, self.chrome, global_save=self.save_all)
 
         self.current = None
@@ -2027,7 +2377,12 @@ class CombinedApp:
         cfg = {}
         cfg.update(self.chrome._collect_settings())
         cfg.update(self.app._collect_settings())
+        cfg.update(self.macro._collect_settings())
         save_config(cfg)
+        try:
+            self.macro._register_hotkeys()
+        except Exception:
+            pass
         try:
             self.typer.persist()
             self.typer._setup_all_hotkeys()
@@ -2060,6 +2415,10 @@ class CombinedApp:
             pass
 
     def _on_close(self):
+        try:
+            self.macro.stop_all()
+        except Exception:
+            pass
         try:
             self.save_all(flash=False)
         except Exception:
