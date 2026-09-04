@@ -1380,20 +1380,25 @@ class MacroTab:
         self.global_save = global_save
         self.pause_event = pause_event  # set while playing so the Typer pauses
 
-        self._events = []
+        self.recordings = []          # [{name, hotkey, events:[...]}]
+        self.sel = None               # tk.IntVar: slot the record hotkey targets
+        self._rows = []
         self._recording = False
-        self._playing = False
+        self._rec_index = 0
         self._listener = None
         self._rec_start = 0.0
         self._last_move = 0.0
+        self._playing = False
+        self._play_index = -1
         self._play_thread = None
         self._stop_play = threading.Event()
         self._hk_handles = []
         self._ctrl = pynput_mouse.Controller() if _HAS_PYNPUT else None
 
+        self._load_recordings()
         self._build_ui()
-        self._load_recording()
         self._load_settings()
+        self._rebuild_list()
         self._register_hotkeys()
         self._refresh_status()
 
@@ -1405,7 +1410,7 @@ class MacroTab:
         body.pack(fill="both", expand=True)
 
         ttk.Label(body, text="Macros", style="H1.TLabel").pack(anchor="w")
-        ttk.Label(body, text="Record your mouse and replay it with a hotkey.",
+        ttk.Label(body, text="Record your mouse and replay saved recordings with hotkeys.",
                   style="Sub.TLabel").pack(anchor="w", pady=(2, 14))
 
         if not _HAS_PYNPUT:
@@ -1415,30 +1420,26 @@ class MacroTab:
                       style="Card.TLabel").pack(anchor="w")
 
         grid = ttk.Frame(body)
-        grid.pack(fill="x")
+        grid.pack(fill="both", expand=True)
         grid.columnconfigure(0, weight=1, uniform="col")
         grid.columnconfigure(1, weight=1, uniform="col")
         left = ttk.Frame(grid); left.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
         right = ttk.Frame(grid); right.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
 
-        # Hotkeys
-        hc = self._card(left, "Hotkeys")
+        # Record hotkey (single; records into the selected recording)
+        hc = self._card(left, "Record hotkey")
         hc.pack(fill="x", pady=(0, 12))
-        r1 = tk.Frame(hc.body, bg=MAC_CARD); r1.pack(fill="x", pady=(0, 4))
-        ttk.Label(r1, text="Record (toggle)", style="Card.TLabel", width=15).pack(side="left")
+        r1 = tk.Frame(hc.body, bg=MAC_CARD); r1.pack(fill="x")
         self.rec_hotkey_entry = ttk.Entry(r1, width=18)
         self.rec_hotkey_entry.insert(0, "ctrl+shift+r")
-        self.rec_hotkey_entry.pack(side="left", padx=6)
-        r2 = tk.Frame(hc.body, bg=MAC_CARD); r2.pack(fill="x")
-        ttk.Label(r2, text="Play (toggle)", style="Card.TLabel", width=15).pack(side="left")
-        self.play_hotkey_entry = ttk.Entry(r2, width=18)
-        self.play_hotkey_entry.insert(0, "ctrl+shift+p")
-        self.play_hotkey_entry.pack(side="left", padx=6)
-        ttk.Button(hc.body, text="Set hotkeys", command=self._apply_hotkeys).pack(anchor="w", pady=(8, 0))
+        self.rec_hotkey_entry.pack(side="left")
+        ttk.Button(r1, text="Set", width=6, command=self._apply_hotkeys).pack(side="left", padx=6)
+        ttk.Label(hc.body, text="Records into the selected recording on the right (toggle).",
+                  style="CardSub.TLabel").pack(anchor="w", pady=(6, 0))
 
         # Capture
         cc = self._card(left, "Capture")
-        cc.pack(fill="x")
+        cc.pack(fill="x", pady=(0, 12))
         self.cap_move = tk.BooleanVar(value=True)
         self.cap_click = tk.BooleanVar(value=True)
         self.cap_scroll = tk.BooleanVar(value=True)
@@ -1446,9 +1447,9 @@ class MacroTab:
         ttk.Checkbutton(cc.body, text="Clicks", style="Card.TCheckbutton", variable=self.cap_click).pack(anchor="w")
         ttk.Checkbutton(cc.body, text="Scroll", style="Card.TCheckbutton", variable=self.cap_scroll).pack(anchor="w")
 
-        # Playback
-        pc = self._card(right, "Playback")
-        pc.pack(fill="x", pady=(0, 12))
+        # Playback (applies to whichever recording you play)
+        pc = self._card(left, "Playback")
+        pc.pack(fill="x")
         self.play_mode = tk.StringVar(value="once")
         ttk.Radiobutton(pc.body, text="Once per press", style="Card.TRadiobutton",
                         variable=self.play_mode, value="once").pack(anchor="w")
@@ -1462,19 +1463,24 @@ class MacroTab:
         ttk.Radiobutton(pc.body, text="Loop until stopped", style="Card.TRadiobutton",
                         variable=self.play_mode, value="until").pack(anchor="w")
 
-        # Recording controls
-        rc = self._card(right, "Recording")
-        rc.pack(fill="x")
-        self.macro_status = ttk.Label(rc.body, text="", style="Card.TLabel")
-        self.macro_status.pack(anchor="w", pady=(0, 8))
-        btns = tk.Frame(rc.body, bg=MAC_CARD); btns.pack(anchor="w")
-        self.rec_btn = RoundedButton(btns, 90, 34, "Record", command=self.toggle_record, radius=9,
-                                     bg_color=MAC_DANGER, hover_color=MAC_DANGER_HOVER, text_color="#FFFFFF")
-        self.rec_btn.pack(side="left")
-        self.play_btn = RoundedButton(btns, 90, 34, "Play", command=self.toggle_play, radius=9,
-                                      bg_color=MAC_ACCENT, hover_color=MAC_ACCENT_HOVER, text_color="#FFFFFF")
-        self.play_btn.pack(side="left", padx=8)
-        RoundedButton(btns, 80, 34, "Clear", command=self._clear, radius=9).pack(side="left")
+        # Recordings list
+        rc = self._card(right, "Recordings")
+        rc.pack(fill="both", expand=True)
+        self.sel = tk.IntVar(value=0)
+        head = tk.Frame(rc.body, bg=MAC_CARD); head.pack(fill="x", pady=(0, 4))
+        ttk.Button(head, text="+ Add recording", command=self._add_recording).pack(side="left")
+        self.macro_status = ttk.Label(rc.body, text="", style="CardSub.TLabel")
+        self.macro_status.pack(anchor="w", pady=(0, 6))
+
+        listwrap = tk.Frame(rc.body, bg=MAC_CARD); listwrap.pack(fill="both", expand=True)
+        self.list_canvas = tk.Canvas(listwrap, height=220, highlightthickness=0, bg=MAC_CARD)
+        lsb = MiniScrollbar(listwrap, command=self.list_canvas.yview, bg=MAC_CARD)
+        self.list_inner = tk.Frame(self.list_canvas, bg=MAC_CARD)
+        self.list_inner.bind("<Configure>", lambda e: self.list_canvas.configure(scrollregion=self.list_canvas.bbox("all")))
+        self.list_canvas.create_window((0, 0), window=self.list_inner, anchor="nw")
+        self.list_canvas.configure(yscrollcommand=lsb.set)
+        self.list_canvas.pack(side="left", fill="both", expand=True)
+        lsb.pack(side="right", fill="y", padx=(2, 0))
 
         # Save bar
         bar = ttk.Frame(body)
@@ -1484,11 +1490,67 @@ class MacroTab:
         RoundedButton(bar, 120, 40, "Save", command=self._save_clicked, radius=10,
                       bg_color=MAC_CONTROL_MUTED, hover_color=MAC_CONTROL_HOVER, text_color=MAC_TEXT).pack(side="right")
 
-    # ---- settings ----
+    # ---- recordings list UI ----
+    def _rebuild_list(self):
+        for w in self.list_inner.winfo_children():
+            w.destroy()
+        self._rows = []
+        if not self.recordings:
+            ttk.Label(self.list_inner, text="No recordings yet. Click “+ Add recording”.",
+                      style="Card.TLabel").pack(anchor="w")
+            return
+        if self.sel.get() >= len(self.recordings):
+            self.sel.set(0)
+        # column headers
+        hdr = tk.Frame(self.list_inner, bg=MAC_CARD); hdr.pack(fill="x")
+        ttk.Label(hdr, text="  Name", style="CardSub.TLabel", width=16).pack(side="left")
+        ttk.Label(hdr, text="Play hotkey", style="CardSub.TLabel", width=14).pack(side="left")
+        for i, rec in enumerate(self.recordings):
+            row = tk.Frame(self.list_inner, bg=MAC_CARD)
+            row.pack(fill="x", pady=3)
+            ttk.Radiobutton(row, variable=self.sel, value=i, style="Card.TRadiobutton").pack(side="left")
+            name_var = tk.StringVar(value=rec.get("name", f"Recording {i + 1}"))
+            ttk.Entry(row, textvariable=name_var, width=13).pack(side="left", padx=(0, 6))
+            hk_var = tk.StringVar(value=rec.get("hotkey", ""))
+            ttk.Entry(row, textvariable=hk_var, width=13).pack(side="left", padx=(0, 6))
+            ttk.Label(row, text=f"{len(rec.get('events', []))} ev", style="CardSub.TLabel", width=7).pack(side="left")
+            RoundedButton(row, 58, 28, "Play", command=lambda i=i: self._toggle_play_index(i), radius=8,
+                          bg_color=MAC_ACCENT, hover_color=MAC_ACCENT_HOVER, text_color="#FFFFFF",
+                          canvas_bg=MAC_CARD).pack(side="left", padx=(4, 4))
+            RoundedButton(row, 30, 28, "✕", command=lambda i=i: self._delete(i), radius=8,
+                          canvas_bg=MAC_CARD).pack(side="left")
+            self._rows.append({"name": name_var, "hotkey": hk_var})
+
+    def _sync_model(self):
+        for i, row in enumerate(self._rows):
+            if i < len(self.recordings):
+                self.recordings[i]["name"] = row["name"].get().strip() or f"Recording {i + 1}"
+                self.recordings[i]["hotkey"] = row["hotkey"].get().strip().lower()
+
+    def _add_recording(self):
+        self._sync_model()
+        n = len(self.recordings) + 1
+        self.recordings.append({"name": f"Recording {n}", "hotkey": "", "events": []})
+        self.sel.set(len(self.recordings) - 1)
+        self._rebuild_list()
+        self._persist_recordings()
+
+    def _delete(self, i):
+        if self._recording or self._playing:
+            return
+        self._sync_model()
+        if 0 <= i < len(self.recordings):
+            del self.recordings[i]
+        if self.sel.get() >= len(self.recordings):
+            self.sel.set(max(0, len(self.recordings) - 1))
+        self._rebuild_list()
+        self._persist_recordings()
+        self._register_hotkeys()
+
+    # ---- settings / persistence ----
     def _collect_settings(self):
         return {
             "macro_record_hotkey": self.rec_hotkey_entry.get(),
-            "macro_play_hotkey": self.play_hotkey_entry.get(),
             "macro_cap_move": self.cap_move.get(),
             "macro_cap_click": self.cap_click.get(),
             "macro_cap_scroll": self.cap_scroll.get(),
@@ -1500,8 +1562,6 @@ class MacroTab:
         cfg = load_config()
         if cfg.get("macro_record_hotkey"):
             self.rec_hotkey_entry.delete(0, "end"); self.rec_hotkey_entry.insert(0, cfg["macro_record_hotkey"])
-        if cfg.get("macro_play_hotkey"):
-            self.play_hotkey_entry.delete(0, "end"); self.play_hotkey_entry.insert(0, cfg["macro_play_hotkey"])
         if "macro_cap_move" in cfg:
             self.cap_move.set(bool(cfg["macro_cap_move"]))
         if "macro_cap_click" in cfg:
@@ -1513,47 +1573,48 @@ class MacroTab:
         if "macro_play_loops" in cfg:
             self.loops_entry.delete(0, "end"); self.loops_entry.insert(0, str(cfg["macro_play_loops"]))
 
+    def _persist_recordings(self):
+        self._sync_model()
+        try:
+            with open(MACRO_PATH, "w", encoding="utf-8") as f:
+                json.dump({"recordings": self.recordings, "selected": self.sel.get() if self.sel else 0}, f)
+        except Exception:
+            pass
+
+    def _load_recordings(self):
+        try:
+            with open(MACRO_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            data = {}
+        if isinstance(data, dict) and "recordings" in data:
+            self.recordings = data.get("recordings") or []
+        elif isinstance(data, dict) and "events" in data:
+            # migrate old single-recording format
+            self.recordings = [{"name": "Recording 1", "hotkey": "ctrl+shift+p", "events": data.get("events", [])}]
+        else:
+            self.recordings = []
+        for i, rec in enumerate(self.recordings):
+            rec.setdefault("name", f"Recording {i + 1}")
+            rec.setdefault("hotkey", "")
+            rec.setdefault("events", [])
+
     def _save_clicked(self):
         if self.global_save:
             self.global_save()
 
-    # ---- recording persistence ----
-    def _save_recording(self):
-        try:
-            with open(MACRO_PATH, "w", encoding="utf-8") as f:
-                json.dump({"events": self._events}, f)
-        except Exception:
-            pass
-
-    def _load_recording(self):
-        try:
-            with open(MACRO_PATH, "r", encoding="utf-8") as f:
-                self._events = json.load(f).get("events", [])
-        except Exception:
-            self._events = []
-
-    def _clear(self):
-        if self._recording or self._playing:
-            return
-        self._events = []
-        self._save_recording()
-        self._refresh_status()
-
     # ---- status ----
     def _summary(self):
-        if not self._events:
-            return "No recording."
-        dur = self._events[-1].get("t", 0)
-        return f"{len(self._events)} events, {dur:.1f}s recorded."
+        if not self.recordings:
+            return "No recordings."
+        if self._recording and 0 <= self._rec_index < len(self.recordings):
+            return f"Recording '{self.recordings[self._rec_index]['name']}'... press the record hotkey to stop."
+        if self._playing and 0 <= self._play_index < len(self.recordings):
+            return f"Playing '{self.recordings[self._play_index]['name']}'..."
+        return f"{len(self.recordings)} recording(s)."
 
     def _refresh_status(self):
-        if self._recording:
-            txt = "Recording... press the record hotkey/button to stop."
-        elif self._playing:
-            txt = "Playing..."
-        else:
-            txt = self._summary()
-        self.macro_status.config(text=txt)
+        self.macro_status.config(text=self._summary())
 
     def _set_status(self, txt):
         self.root.after(0, lambda: self.macro_status.config(text=txt))
@@ -1566,11 +1627,18 @@ class MacroTab:
             except Exception:
                 pass
         self._hk_handles = []
-        for combo, fn in ((self.rec_hotkey_entry.get().strip().lower(), self._hk_record),
-                          (self.play_hotkey_entry.get().strip().lower(), self._hk_play)):
-            if combo:
+        self._sync_model()
+        combo = self.rec_hotkey_entry.get().strip().lower()
+        if combo:
+            try:
+                self._hk_handles.append(keyboard.add_hotkey(combo, self._hk_record))
+            except Exception:
+                pass
+        for i, rec in enumerate(self.recordings):
+            hk = rec.get("hotkey", "").strip().lower()
+            if hk:
                 try:
-                    self._hk_handles.append(keyboard.add_hotkey(combo, fn))
+                    self._hk_handles.append(keyboard.add_hotkey(hk, lambda i=i: self._hk_play(i)))
                 except Exception:
                     pass
 
@@ -1582,15 +1650,21 @@ class MacroTab:
     def _hk_record(self):
         self.root.after(0, self.toggle_record)
 
-    def _hk_play(self):
-        self.root.after(0, self.toggle_play)
+    def _hk_play(self, i):
+        self.root.after(0, lambda: self._toggle_play_index(i))
 
     # ---- record ----
     def toggle_record(self):
         if not _HAS_PYNPUT or self._playing:
             return
         if not self._recording:
-            self._events = []
+            if not self.recordings:
+                self._add_recording()
+            idx = self.sel.get() if self.sel else 0
+            if idx < 0 or idx >= len(self.recordings):
+                idx = 0
+            self._rec_index = idx
+            self.recordings[idx]["events"] = []
             self._rec_start = time.perf_counter()
             self._last_move = 0.0
             self._recording = True
@@ -1604,7 +1678,8 @@ class MacroTab:
             except Exception:
                 pass
             self._listener = None
-            self._save_recording()
+            self._persist_recordings()
+            self._rebuild_list()
         self._refresh_status()
 
     def _on_move(self, x, y):
@@ -1614,29 +1689,37 @@ class MacroTab:
         if now - self._last_move < 0.008:  # light throttle
             return
         self._last_move = now
-        self._events.append({"t": now, "type": "move", "x": x, "y": y})
+        self.recordings[self._rec_index]["events"].append({"t": now, "type": "move", "x": x, "y": y})
 
     def _on_click(self, x, y, button, pressed):
         if not self._recording or not self.cap_click.get():
             return
-        self._events.append({"t": time.perf_counter() - self._rec_start, "type": "click",
-                             "x": x, "y": y, "button": button.name, "pressed": bool(pressed)})
+        self.recordings[self._rec_index]["events"].append(
+            {"t": time.perf_counter() - self._rec_start, "type": "click",
+             "x": x, "y": y, "button": button.name, "pressed": bool(pressed)})
 
     def _on_scroll(self, x, y, dx, dy):
         if not self._recording or not self.cap_scroll.get():
             return
-        self._events.append({"t": time.perf_counter() - self._rec_start, "type": "scroll",
-                             "x": x, "y": y, "dx": dx, "dy": dy})
+        self.recordings[self._rec_index]["events"].append(
+            {"t": time.perf_counter() - self._rec_start, "type": "scroll",
+             "x": x, "y": y, "dx": dx, "dy": dy})
 
     # ---- play ----
-    def toggle_play(self):
+    def _toggle_play_index(self, i):
         if not _HAS_PYNPUT or self._recording:
             return
         if self._playing:
-            self._stop_play.set()
+            if self._play_index == i:
+                self._stop_play.set()
+            else:
+                self._set_status("Another recording is playing.")
             return
-        if not self._events:
-            self._set_status("Nothing recorded yet.")
+        if i < 0 or i >= len(self.recordings):
+            return
+        events = list(self.recordings[i].get("events", []))
+        if not events:
+            self._set_status("That recording is empty.")
             return
         try:
             loops = max(1, int(self.loops_entry.get()))
@@ -1644,11 +1727,12 @@ class MacroTab:
             loops = 1
         self._stop_play.clear()
         self._playing = True
+        self._play_index = i
         if self.pause_event:
             self.pause_event.set()  # pause the Typer while the macro runs
         self._refresh_status()
         self._play_thread = threading.Thread(
-            target=self._play_loop, args=(list(self._events), self.play_mode.get(), loops), daemon=True)
+            target=self._play_loop, args=(events, self.play_mode.get(), loops), daemon=True)
         self._play_thread.start()
 
     def _btn(self, name):
@@ -1697,6 +1781,7 @@ class MacroTab:
                     break
         finally:
             self._playing = False
+            self._play_index = -1
             if self.pause_event:
                 self.pause_event.clear()  # resume the Typer
             self._set_status(self._summary())
@@ -2402,6 +2487,7 @@ class CombinedApp:
         cfg.update(self.macro._collect_settings())
         save_config(cfg)
         try:
+            self.macro._persist_recordings()
             self.macro._register_hotkeys()
         except Exception:
             pass
