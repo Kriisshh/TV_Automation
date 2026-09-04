@@ -2,10 +2,11 @@
 Stream Suite - Windows desktop automation app (three tabs in one window).
 
 Tab 1 - Chrome Sequencer:
-  Initial wait -> open selected Chrome profiles (1 window each) -> wait for
-  extensions/VPN -> navigate each window to the URL -> wait -> send per-tab keys
-  ("m"/"c") -> optional final key presses. When it finishes the app stays open
-  and switches to the Typer tab.
+  Initial wait, then for EACH selected profile in turn: open one window ->
+  wait (extensions/VPN) -> navigate to the next URL (assigned in order) -> wait
+  -> send per-profile keys ("m"/"c") -> delay between profiles. Then final key
+  presses. When it finishes the app stays open and switches to the Typer tab.
+  The abort hotkey can optionally double as a start hotkey (toggle start/stop).
 
 Tab 2 - Typer:
   Stream-chat message sequencer. Profile "groups" each own a global hotkey, a
@@ -717,6 +718,9 @@ class ChromeTab:
         self.stop_event = threading.Event()
         self.worker = None
         self.hotkey_handle = None
+        # When True, the abort hotkey also starts the sequence if it isn't
+        # running (same key toggles start/stop). Set from the Application tab.
+        self.hotkey_toggle_start = False
 
         self.chrome_exe = find_chrome_exe()
         self.profiles = list_profiles()
@@ -748,11 +752,18 @@ class ChromeTab:
         # Target card (full width)
         tgt = self._card(body, "Target")
         tgt.pack(fill="x", pady=(0, 8))
-        trow1 = tk.Frame(tgt.body, bg=MAC_CARD); trow1.pack(fill="x", pady=(0, 6))
-        ttk.Label(trow1, text="URL", style="Card.TLabel", width=11).pack(side="left")
-        self.url_entry = ttk.Entry(trow1)
-        self.url_entry.insert(0, "https://")
-        self.url_entry.pack(side="left", fill="x", expand=True, padx=6)
+        trow1 = tk.Frame(tgt.body, bg=MAC_CARD); trow1.pack(fill="x", pady=(0, 2))
+        ttk.Label(trow1, text="URLs", style="Card.TLabel", width=11).pack(side="left", anchor="n")
+        urlbox = tk.Frame(trow1, bg=MAC_CARD)
+        urlbox.pack(side="left", fill="x", expand=True, padx=6)
+        self.url_text = tk.Text(urlbox, height=3, font=FONT_BODY, relief="flat",
+                                bg=MAC_CARD, fg=MAC_TEXT, insertbackground=MAC_TEXT,
+                                highlightbackground=MAC_BORDER, highlightcolor=MAC_ACCENT,
+                                highlightthickness=1, bd=0, padx=6, pady=4, wrap="none")
+        self.url_text.insert("1.0", "https://")
+        self.url_text.pack(fill="x", expand=True)
+        ttk.Label(tgt.body, text="One URL per line — assigned to profiles in order (wraps if fewer URLs).",
+                  style="CardSub.TLabel").pack(anchor="w", pady=(2, 6))
         trow2 = tk.Frame(tgt.body, bg=MAC_CARD); trow2.pack(fill="x")
         ttk.Label(trow2, text="Chrome path", style="Card.TLabel", width=11).pack(side="left")
         self.chrome_entry = ttk.Entry(trow2)
@@ -784,11 +795,11 @@ class ChromeTab:
 
         self.d_initial = DelayInput(left, "Initial wait", "3", "3", "6")
         self.d_initial.pack(fill="x", pady=(0, 8))
-        self.d_ext = DelayInput(left, "Wait for extensions / VPN", "10", "8", "15")
+        self.d_ext = DelayInput(left, "Wait after opening profile (extensions / VPN)", "10", "8", "15")
         self.d_ext.pack(fill="x", pady=(0, 8))
-        self.d_afterurl = DelayInput(left, "Wait after opening URLs", "5", "4", "8")
+        self.d_afterurl = DelayInput(left, "Wait after typing URL", "5", "4", "8")
         self.d_afterurl.pack(fill="x", pady=(0, 8))
-        self.d_pertab = DelayInput(left, "Wait before each tab's keys", "1", "1", "3")
+        self.d_pertab = DelayInput(left, "Delay between profiles", "2", "2", "5")
         self.d_pertab.pack(fill="x", pady=(0, 8))
 
         # RIGHT column
@@ -855,9 +866,14 @@ class ChromeTab:
         self.save_btn.pack(side="right")
 
     # ---- settings ----
+    def _get_urls(self):
+        """URLs from the multi-line box: one per line, stripped, non-empty."""
+        raw = self.url_text.get("1.0", "end-1c")
+        return [line.strip() for line in raw.splitlines() if line.strip()]
+
     def _collect_settings(self):
         return {
-            "url": self.url_entry.get(),
+            "urls": self._get_urls(),
             "chrome": self.chrome_entry.get(),
             "send_m": self.send_m.get(),
             "send_c": self.send_c.get(),
@@ -879,8 +895,13 @@ class ChromeTab:
         cfg = load_config()
         if not cfg:
             return
-        if "url" in cfg:
-            self.url_entry.delete(0, "end"); self.url_entry.insert(0, cfg["url"])
+        # URLs: new "urls" list, or legacy single "url" string.
+        urls = cfg.get("urls")
+        if urls is None and "url" in cfg:
+            urls = [cfg["url"]] if cfg["url"] else []
+        if urls is not None:
+            self.url_text.delete("1.0", "end")
+            self.url_text.insert("1.0", "\n".join(urls))
         if cfg.get("chrome"):
             self.chrome_entry.delete(0, "end"); self.chrome_entry.insert(0, cfg["chrome"])
         if "send_m" in cfg:
@@ -962,8 +983,16 @@ class ChromeTab:
             pass
 
     def _hotkey_fired(self):
-        self.stop_event.set()
-        self._log("Abort hotkey pressed - stopping sequence.")
+        running = bool(self.worker and self.worker.is_alive())
+        if running:
+            self.stop_event.set()
+            self._log("Hotkey pressed - stopping sequence.")
+        elif self.hotkey_toggle_start:
+            # Same key also starts the sequence when nothing is running.
+            self._log("Hotkey pressed - starting sequence.")
+            self.root.after(0, self._start)
+        else:
+            self._log("Hotkey pressed - no sequence running.")
 
     # ---- run ----
     def _sleep(self, seconds):
@@ -990,9 +1019,12 @@ class ChromeTab:
                 return
             messagebox.showwarning("Chrome", "chrome.exe not found. Set the path.")
             return
-        url = self.url_entry.get().strip()
-        if not url or url == "https://":
-            if not auto and not messagebox.askyesno("URL", "URL looks empty. Continue anyway?"):
+        urls = self._get_urls()
+        if not urls or urls == ["https://"]:
+            if auto:
+                self._log("Auto-run: no URLs entered, skipping.")
+                return
+            if not messagebox.askyesno("URLs", "No URLs entered. Continue anyway?"):
                 return
 
         try:
@@ -1012,7 +1044,7 @@ class ChromeTab:
         self.start_btn.set_enabled(False)
         self.worker = threading.Thread(
             target=self._run_sequence,
-            args=(chrome, url, selected, self.send_m.get(), self.send_c.get(),
+            args=(chrome, urls, selected, self.send_m.get(), self.send_c.get(),
                   key_delay, final_keys, final_delay, self.tile_grid.get()),
             daemon=True,
         )
@@ -1022,7 +1054,7 @@ class ChromeTab:
         self.stop_event.set()
         self._log("Abort requested - stopping sequence.")
 
-    def _run_sequence(self, chrome, url, profiles, send_m, send_c, key_delay,
+    def _run_sequence(self, chrome, urls, profiles, send_m, send_c, key_delay,
                       final_keys=None, final_delay=0.5, tile_grid=False):
         try:
             keys = []
@@ -1031,40 +1063,43 @@ class ChromeTab:
             if send_c:
                 keys.append("c")
 
+            urls = list(urls) if urls else [""]
+
             s = self.d_initial.seconds()
             self._log(f"Initial wait {s:.1f}s")
             self._sleep(s)
 
-            self._log("Opening Chrome profiles...")
-            profile_hwnds = {}
-            for directory in profiles:
+            # Per-profile pipeline: fully process one profile before the next.
+            opened_hwnds = []
+            total = len(profiles)
+            for idx, directory in enumerate(profiles):
                 if self.stop_event.is_set():
                     raise KeyboardInterrupt
+
+                # 1) Open one profile window.
+                self._log(f"[{idx + 1}/{total}] Opening [{directory}]...")
                 before = chrome_window_handles()
                 subprocess.Popen([
                     chrome, f"--profile-directory={directory}", "--new-window", "about:blank",
                 ])
                 hwnd = self._wait_for_new_window(before, timeout=15)
-                if hwnd:
-                    profile_hwnds[directory] = hwnd
-                    self._log(f"Opened [{directory}]")
-                else:
-                    self._log(f"WARNING: window not detected for [{directory}]")
-                self._sleep(1.0)
+                if not hwnd:
+                    self._log(f"WARNING: window not detected for [{directory}], skipping")
+                    continue
+                opened_hwnds.append(hwnd)
+                if tile_grid:
+                    tile_windows(opened_hwnds)
 
-            if tile_grid and profile_hwnds:
-                self._log("Tiling windows in a grid...")
-                tile_windows(list(profile_hwnds.values()))
-                self._sleep(0.5)
+                # 2) Wait for extensions / VPN to come up.
+                s = self.d_ext.seconds()
+                self._log(f"[{directory}] wait (extensions/VPN) {s:.1f}s")
+                self._sleep(s)
 
-            s = self.d_ext.seconds()
-            self._log(f"Wait for extensions / VPN {s:.1f}s")
-            self._sleep(s)
-
-            self._log("Navigating profiles to URL...")
-            for directory, hwnd in profile_hwnds.items():
+                # 3) Type the URL (assigned sequentially, wrapping if fewer
+                #    URLs than profiles).
                 if self.stop_event.is_set():
                     raise KeyboardInterrupt
+                url = urls[idx % len(urls)]
                 force_foreground(hwnd)
                 self._sleep(0.4)
                 keyboard.send("ctrl+l")
@@ -1072,19 +1107,16 @@ class ChromeTab:
                 keyboard.write(url, delay=0.01)
                 self._sleep(0.1)
                 keyboard.send("enter")
-                self._log(f"Navigated [{directory}]")
-                self._sleep(0.5)
+                self._log(f"[{directory}] navigated to {url or '(blank)'}")
 
-            s = self.d_afterurl.seconds()
-            self._log(f"Wait after opening URLs {s:.1f}s")
-            self._sleep(s)
+                # 4) Wait after typing the URL.
+                s = self.d_afterurl.seconds()
+                self._log(f"[{directory}] wait after URL {s:.1f}s")
+                self._sleep(s)
 
-            self._log(f"Sending keys per tab: {keys or '(none)'}")
-            for directory, hwnd in profile_hwnds.items():
+                # 5) Send the per-profile keys ("m"/"c").
                 if self.stop_event.is_set():
                     raise KeyboardInterrupt
-                s = self.d_pertab.seconds()
-                self._sleep(s)
                 force_foreground(hwnd)
                 self._sleep(0.3)
                 for i, k in enumerate(keys):
@@ -1093,6 +1125,14 @@ class ChromeTab:
                     keyboard.send(k)
                     if i < len(keys) - 1:
                         self._sleep(key_delay)
+                if keys:
+                    self._log(f"[{directory}] sent keys: {keys}")
+
+                # 6) Delay before moving on to the next profile.
+                if idx < total - 1:
+                    s = self.d_pertab.seconds()
+                    self._log(f"Delay before next profile {s:.1f}s")
+                    self._sleep(s)
 
             if final_keys:
                 self._log(f"Final key presses: {final_keys}")
@@ -1177,15 +1217,19 @@ class ApplicationTab:
                         style="Card.TCheckbutton", variable=self.autorun).pack(anchor="w", pady=(6, 0))
 
         # Abort hotkey
-        hc = self._card(left, "Abort hotkey")
+        hc = self._card(left, "Start / Abort hotkey")
         hc.pack(fill="x", pady=(0, 12))
         hrow = tk.Frame(hc.body, bg=MAC_CARD); hrow.pack(fill="x")
         self.hotkey_entry = ttk.Entry(hrow, width=20)
         self.hotkey_entry.insert(0, "ctrl+shift+q")
         self.hotkey_entry.pack(side="left")
         ttk.Button(hrow, text="Set", width=6, command=self._apply_hotkey).pack(side="left", padx=6)
-        ttk.Label(hc.body, text="Stops a running Chrome sequence.",
-                  style="CardSub.TLabel").pack(anchor="w", pady=(6, 0))
+        self.hotkey_toggle = tk.BooleanVar(value=False)
+        ttk.Checkbutton(hc.body, text="Also use this hotkey to start the sequence (toggle start/stop)",
+                        style="Card.TCheckbutton", variable=self.hotkey_toggle,
+                        command=self._apply_hotkey_toggle).pack(anchor="w", pady=(6, 0))
+        ttk.Label(hc.body, text="Press once to start; press again to stop a running sequence.",
+                  style="CardSub.TLabel").pack(anchor="w", pady=(4, 0))
 
         # Updates
         uc = self._card(right, "Updates")
@@ -1214,6 +1258,7 @@ class ApplicationTab:
     def _collect_settings(self):
         return {
             "hotkey": self.hotkey_entry.get(),
+            "hotkey_toggle": self.hotkey_toggle.get(),
             "run_on_startup": self.run_on_startup.get(),
             "autorun": self.autorun.get(),
         }
@@ -1222,6 +1267,9 @@ class ApplicationTab:
         cfg = load_config()
         if cfg.get("hotkey"):
             self.hotkey_entry.delete(0, "end"); self.hotkey_entry.insert(0, cfg["hotkey"])
+        if "hotkey_toggle" in cfg:
+            self.hotkey_toggle.set(bool(cfg["hotkey_toggle"]))
+        self.chrome.hotkey_toggle_start = self.hotkey_toggle.get()
         if "autorun" in cfg:
             self.autorun.set(bool(cfg["autorun"]))
         if "run_on_startup" in cfg:
@@ -1237,6 +1285,10 @@ class ApplicationTab:
         combo = self.hotkey_entry.get().strip().lower()
         self.chrome._register_hotkey(combo)
         self._flash(f"Hotkey set: {combo}")
+
+    def _apply_hotkey_toggle(self):
+        self.chrome.hotkey_toggle_start = self.hotkey_toggle.get()
+        self._flash("Start hotkey " + ("enabled" if self.hotkey_toggle.get() else "disabled"))
 
     def _toggle_startup(self):
         ok = set_run_on_startup(self.run_on_startup.get())

@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "Twitch Chat Autofocus",
+  "version": "1.0.0",
+  "description": "Keeps the Twitch chat input focused at all times.",
+  "content_scripts": [
+    {
+      "matches": ["*://*.twitch.tv/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ]
+}
