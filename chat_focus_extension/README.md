@@ -7,9 +7,9 @@ libraries. One content script set scoped to `twitch.tv`.
 1. **Chat autofocus** — re-focuses the chat message box whenever it loses focus
    (event-driven `focusout` listener; a short startup poll waits for the input to
    appear, then idles).
-2. **Auto-zoom** — sets Twitch tabs to 75% zoom on load (edit `ZOOM` in
-   `background.js` to change). For a global default on *all* sites, set
-   `chrome://settings` → Appearance → Page zoom → 75% instead.
+2. **Auto-zoom** — sets Twitch tabs to a user-defined zoom on load (default
+   75%). Change it on the extension's options page; open Twitch tabs are
+   re-zoomed instantly, no reload needed.
 3. **Stream watchdog** — two cadences:
    - **Normal:** every *N* minutes (fixed, or a random value in a min–max range)
      it checks the `<video>`.
