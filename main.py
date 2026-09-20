@@ -1223,14 +1223,21 @@ class ChromeTab:
 # ----------------------------------------------------------------------------
 
 class ApplicationTab:
-    def __init__(self, parent, root, chrome, global_save=None):
+    def __init__(self, parent, root, chrome, global_save=None, typer=None, macro=None):
         self.parent = parent
         self.root = root
         self.chrome = chrome
+        self.typer = typer
+        self.macro = macro
         self.global_save = global_save
+        self._combo_selected = ""      # name of the one selected Typer group ("" = none)
+        self._combo_vars = {}
+        self._combo_hk = None
         self._build_ui()
         self._load_settings()
+        self._rebuild_combo_list()
         self._register_hotkey_from_field()
+        self._register_combined_hotkey()
 
     def _card(self, parent, title):
         return make_card(parent, title)
@@ -1290,6 +1297,24 @@ class ApplicationTab:
         ttk.Label(cc.body, text="Backup or restore your settings (config.json).",
                   style="CardSub.TLabel").pack(anchor="w", pady=(6, 0))
 
+        # Play together (one hotkey fires the checked Typer group + the Macro)
+        tc = self._card(body, "Play together (one hotkey)")
+        tc.pack(fill="x", pady=(12, 0))
+        trow = tk.Frame(tc.body, bg=MAC_CARD); trow.pack(fill="x")
+        self.combo_hotkey_entry = ttk.Entry(trow, width=18)
+        self.combo_hotkey_entry.insert(0, "ctrl+shift+t")
+        self.combo_hotkey_entry.pack(side="left")
+        ttk.Button(trow, text="Set", width=6, command=self._apply_combined).pack(side="left", padx=6)
+        ttk.Button(trow, text="Refresh list", command=self._rebuild_combo_list).pack(side="left")
+        self.combo_macro = tk.BooleanVar(value=False)
+        ttk.Checkbutton(tc.body, text="Macro (all checked recordings)", style="Card.TCheckbutton",
+                        variable=self.combo_macro).pack(anchor="w", pady=(8, 2))
+        ttk.Label(tc.body, text="Select up to one Typer group:", style="CardSub.TLabel").pack(anchor="w")
+        self.combo_list = tk.Frame(tc.body, bg=MAC_CARD)
+        self.combo_list.pack(fill="x", pady=(2, 0))
+        ttk.Label(tc.body, text="Pressing the hotkey plays the checked group + macro together; press again to stop.",
+                  style="CardSub.TLabel").pack(anchor="w", pady=(6, 0))
+
         # Save bar
         bar = ttk.Frame(body)
         bar.pack(fill="x", pady=(14, 0))
@@ -1305,6 +1330,9 @@ class ApplicationTab:
             "hotkey_toggle": self.hotkey_toggle.get(),
             "run_on_startup": self.run_on_startup.get(),
             "autorun": self.autorun.get(),
+            "combined_hotkey": self.combo_hotkey_entry.get(),
+            "combined_macro": self.combo_macro.get(),
+            "combined_typer": self._combo_selected,
         }
 
     def _load_settings(self):
@@ -1321,9 +1349,92 @@ class ApplicationTab:
             if want != is_run_on_startup():
                 set_run_on_startup(want)
             self.run_on_startup.set(want)
+        if cfg.get("combined_hotkey"):
+            self.combo_hotkey_entry.delete(0, "end"); self.combo_hotkey_entry.insert(0, cfg["combined_hotkey"])
+        if "combined_macro" in cfg:
+            self.combo_macro.set(bool(cfg["combined_macro"]))
+        self._combo_selected = cfg.get("combined_typer", "") or ""
 
     def _register_hotkey_from_field(self):
         self.chrome._register_hotkey(self.hotkey_entry.get().strip().lower())
+
+    # ---- Play together (combined Typer + Macro on one hotkey) ----
+    def _rebuild_combo_list(self):
+        for w in self.combo_list.winfo_children():
+            w.destroy()
+        self._combo_vars = {}
+        groups = list(self.typer.groups.keys()) if self.typer else []
+        if not groups:
+            ttk.Label(self.combo_list, text="No Typer groups.", style="Card.TLabel").pack(anchor="w")
+            return
+        if self._combo_selected not in groups:
+            # keep an empty selection if the saved group no longer exists
+            if self._combo_selected:
+                self._combo_selected = self._combo_selected if self._combo_selected in groups else ""
+        for name in groups:
+            var = tk.BooleanVar(value=(name == self._combo_selected))
+            self._combo_vars[name] = var
+            ttk.Checkbutton(self.combo_list, text=name, style="Card.TCheckbutton",
+                            variable=var, command=lambda n=name: self._combo_pick(n)).pack(anchor="w")
+
+    def _combo_pick(self, name):
+        if self._combo_vars[name].get():
+            for n, v in self._combo_vars.items():
+                if n != name:
+                    v.set(False)
+            self._combo_selected = name
+        else:
+            self._combo_selected = ""
+
+    def _register_combined_hotkey(self):
+        if self._combo_hk is not None:
+            try:
+                keyboard.remove_hotkey(self._combo_hk)
+            except Exception:
+                pass
+            self._combo_hk = None
+        combo = self.combo_hotkey_entry.get().strip().lower()
+        if combo:
+            try:
+                self._combo_hk = keyboard.add_hotkey(combo, self._combined_fired)
+            except Exception:
+                pass
+
+    def _apply_combined(self):
+        self._register_combined_hotkey()
+        self._flash("Combined hotkey set")
+
+    def _combined_fired(self):
+        self.root.after(0, self._combined_trigger)
+
+    def _combined_trigger(self):
+        tp, mac = self.typer, self.macro
+        name = self._combo_selected
+        ev = tp.running_events.get(name) if (tp and name) else None
+        typer_running = bool(ev and getattr(ev, "active", False))
+        macro_running = bool(mac and getattr(mac, "_playing", False))
+
+        if typer_running or macro_running:
+            # Something's running -> stop both.
+            if typer_running:
+                ev.set()
+            if macro_running:
+                mac._stop_play.set()
+            return
+
+        # Start the checked Typer group (if any) and the macro (if checked).
+        if tp and name and name in tp.groups:
+            ev = tp.running_events.get(name)
+            if ev is None:
+                ev = threading.Event()
+                setattr(ev, "active", False)
+                tp.running_events[name] = ev
+            if not getattr(ev, "active", False):
+                ev.clear()
+                setattr(ev, "active", True)
+                threading.Thread(target=tp._run_seq, args=(tp.groups[name], name, ev), daemon=True).start()
+        if mac and self.combo_macro.get() and not mac._playing:
+            mac.toggle_play_all()
 
     def _apply_hotkey(self):
         combo = self.hotkey_entry.get().strip().lower()
@@ -2563,7 +2674,8 @@ class CombinedApp:
         self.chrome = ChromeTab(self.chrome_frame, root, global_save=self.save_all, on_done=self._focus_typer)
         self.typer = TyperTab(self.typer_frame, root, global_save=self.save_all, input_lock=self.input_lock)
         self.macro = MacroTab(self.macro_frame, root, global_save=self.save_all, input_lock=self.input_lock)
-        self.app = ApplicationTab(self.app_frame, root, self.chrome, global_save=self.save_all)
+        self.app = ApplicationTab(self.app_frame, root, self.chrome, global_save=self.save_all,
+                                  typer=self.typer, macro=self.macro)
 
         self.current = None
         self.select("chrome")
@@ -2612,6 +2724,11 @@ class CombinedApp:
         try:
             self.typer.persist()
             self.typer._setup_all_hotkeys()
+        except Exception:
+            pass
+        try:
+            self.app._rebuild_combo_list()      # reflect any group changes
+            self.app._register_combined_hotkey()
         except Exception:
             pass
         if flash:
