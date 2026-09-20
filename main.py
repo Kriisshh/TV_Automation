@@ -271,6 +271,18 @@ def force_foreground(hwnd):
         pass
 
 
+def acquire_input(lock, stop):
+    """Block until the shared input lock is acquired, or stop() becomes true.
+    Returns True if acquired (caller must release), False if it gave up.
+    A None lock means "no coordination" -> always True (nothing to release)."""
+    if lock is None:
+        return True
+    while not stop():
+        if lock.acquire(timeout=0.1):
+            return True
+    return False
+
+
 # ----------------------------------------------------------------------------
 # Design tokens (Apple/macOS-inspired light theme, teal accent)
 # ----------------------------------------------------------------------------
@@ -1374,11 +1386,11 @@ class ApplicationTab:
 # ----------------------------------------------------------------------------
 
 class MacroTab:
-    def __init__(self, parent, root, global_save=None, pause_event=None):
+    def __init__(self, parent, root, global_save=None, input_lock=None):
         self.parent = parent
         self.root = root
         self.global_save = global_save
-        self.pause_event = pause_event  # set while playing so the Typer pauses
+        self.input_lock = input_lock  # held only while actually playing a recording
 
         self.recordings = []          # [{name, hotkey, events:[...]}]
         self.sel = None               # tk.IntVar: slot the record hotkey targets
@@ -1762,8 +1774,6 @@ class MacroTab:
         self._stop_play.clear()
         self._playing = True
         self._play_index = i
-        if self.pause_event:
-            self.pause_event.set()  # pause the Typer while the macro runs
         self._refresh_status()
         self._play_thread = threading.Thread(
             target=self._play_loop, args=(events, self.play_mode.get(), loops), daemon=True)
@@ -1784,8 +1794,6 @@ class MacroTab:
         self._stop_play.clear()
         self._playing = True
         self._play_index = -1
-        if self.pause_event:
-            self.pause_event.set()
         self._play_thread = threading.Thread(target=self._play_all_loop, args=(seq,), daemon=True)
         self._play_thread.start()
 
@@ -1795,14 +1803,22 @@ class MacroTab:
                 if self._stop_play.is_set():
                     break
                 self._set_status(f"Playing '{name}' ({idx + 1}/{len(seq)})...")
-                start = time.perf_counter()
-                for ev in events:
-                    if not self._wait(ev.get("t", 0), start):
-                        break
-                    try:
-                        self._do_event(ev)
-                    except Exception:
-                        pass
+                # Hold the shared input lock only while this recording plays, so
+                # the Typer waits until it's done; released before the delay below.
+                if not acquire_input(self.input_lock, self._stop_play.is_set):
+                    break
+                try:
+                    start = time.perf_counter()
+                    for ev in events:
+                        if not self._wait(ev.get("t", 0), start):
+                            break
+                        try:
+                            self._do_event(ev)
+                        except Exception:
+                            pass
+                finally:
+                    if self.input_lock:
+                        self.input_lock.release()
                 if self._stop_play.is_set() or idx >= len(seq) - 1:
                     continue
                 # fixed/random delay after each macro (except the last)
@@ -1818,8 +1834,6 @@ class MacroTab:
         finally:
             self._playing = False
             self._play_index = -1
-            if self.pause_event:
-                self.pause_event.clear()
             self._set_status(self._summary())
 
     def _btn(self, name):
@@ -1855,28 +1869,33 @@ class MacroTab:
         try:
             n = 0
             while not self._stop_play.is_set():
-                start = time.perf_counter()
-                for ev in events:
-                    if not self._wait(ev.get("t", 0), start):
-                        break
-                    try:
-                        self._do_event(ev)
-                    except Exception:
-                        pass
+                # Hold the input lock only for one pass of the recording, then
+                # release so a waiting Typer message can slip in between loops.
+                if not acquire_input(self.input_lock, self._stop_play.is_set):
+                    break
+                try:
+                    start = time.perf_counter()
+                    for ev in events:
+                        if not self._wait(ev.get("t", 0), start):
+                            break
+                        try:
+                            self._do_event(ev)
+                        except Exception:
+                            pass
+                finally:
+                    if self.input_lock:
+                        self.input_lock.release()
                 n += 1
                 if mode == "once" or (mode == "loops" and n >= loops):
                     break
+                time.sleep(0.2)  # brief yield between loops so the Typer can run
         finally:
             self._playing = False
             self._play_index = -1
-            if self.pause_event:
-                self.pause_event.clear()  # resume the Typer
             self._set_status(self._summary())
 
     def stop_all(self):
         self._stop_play.set()
-        if self.pause_event:
-            self.pause_event.clear()
         if self._recording:
             self._recording = False
             try:
@@ -1891,11 +1910,11 @@ class MacroTab:
 # ----------------------------------------------------------------------------
 
 class TyperTab:
-    def __init__(self, parent, root, global_save=None, pause_event=None):
+    def __init__(self, parent, root, global_save=None, input_lock=None):
         self.parent = parent
         self.root = root
         self.global_save = global_save
-        self.pause_event = pause_event  # when set, hold typing (a macro is playing)
+        self.input_lock = input_lock  # held only while sending a message
 
         self.current_group_name = None
         self.editor_loaded = False
@@ -2427,14 +2446,17 @@ class TyperTab:
             setattr(ev, 'active', True)
             threading.Thread(target=self._run_seq, args=(self.groups[name], name, ev)).start()
 
-    def _wait_while_paused(self, ev):
-        pe = self.pause_event
-        if not pe:
-            return
-        if pe.is_set():
-            self.root.after(0, lambda: self.status_label.config(text="Paused (macro running)...", fg=COLOR_STATUS_INACTIVE))
-            while pe.is_set() and not ev.is_set():
-                time.sleep(0.1)
+    def _send_locked(self, ev, fn):
+        """Run keystroke-sending fn while holding the shared input lock, so a
+        macro can't drive input at the same instant. Returns False if aborted."""
+        if not acquire_input(self.input_lock, ev.is_set):
+            return False
+        try:
+            fn()
+        finally:
+            if self.input_lock:
+                self.input_lock.release()
+        return True
 
     def _run_seq(self, data, name, ev):
         self.root.after(0, lambda: self.status_label.config(text=f"Running: {name}", fg=COLOR_ACCENT))
@@ -2446,20 +2468,26 @@ class TyperTab:
         while cur < loops and not ev.is_set():
             for i, s in enumerate(steps):
                 if ev.is_set(): break
-                self._wait_while_paused(ev)   # hold while a macro is playing
-                if ev.is_set(): break
                 msg = self._get_msg(name, i, s)
                 if msg:
-                    keyboard.write(msg); time.sleep(0.05); keyboard.send("enter")
+                    # Send the message holding the lock (brief); if a macro is
+                    # mid-recording this blocks until the macro releases it.
+                    if not self._send_locked(ev, lambda m=msg: (
+                            keyboard.write(m), time.sleep(0.05), keyboard.send("enter"))):
+                        break
+                    # Delay is idle time (lock released) -> the macro can run.
                     d = self._parse_delay(s.get('delay', '1-2'))
                     t = time.time()
                     while time.time() - t < d:
                         if ev.is_set(): break
                         time.sleep(0.1)
                 if i < len(steps) - 1 and not ev.is_set():
-                    keyboard.send(data.get('switch_key', 'alt+esc')); time.sleep(0.2)
+                    if not self._send_locked(ev, lambda: (
+                            keyboard.send(data.get('switch_key', 'alt+esc')), time.sleep(0.2))):
+                        break
             if data.get('loop_enabled') and not ev.is_set():
-                keyboard.send(data.get('switch_key', 'alt+esc')); time.sleep(0.2)
+                self._send_locked(ev, lambda: (
+                    keyboard.send(data.get('switch_key', 'alt+esc')), time.sleep(0.2)))
             cur += 1
 
         setattr(ev, 'active', False)
@@ -2526,12 +2554,15 @@ class CombinedApp:
         self._frames = {"chrome": self.chrome_frame, "typer": self.typer_frame,
                         "macro": self.macro_frame, "app": self.app_frame}
 
-        # Set while a macro is playing so the Typer pauses its typing.
-        self.macro_pause = threading.Event()
+        # Shared input lock: the Typer holds it only while sending a message,
+        # the Macro holds it only while playing a recording. Whoever isn't
+        # holding it runs during the other's delay/idle phase, so the two
+        # interleave (cooperative time-sharing) instead of one fully pausing.
+        self.input_lock = threading.Lock()
 
         self.chrome = ChromeTab(self.chrome_frame, root, global_save=self.save_all, on_done=self._focus_typer)
-        self.typer = TyperTab(self.typer_frame, root, global_save=self.save_all, pause_event=self.macro_pause)
-        self.macro = MacroTab(self.macro_frame, root, global_save=self.save_all, pause_event=self.macro_pause)
+        self.typer = TyperTab(self.typer_frame, root, global_save=self.save_all, input_lock=self.input_lock)
+        self.macro = MacroTab(self.macro_frame, root, global_save=self.save_all, input_lock=self.input_lock)
         self.app = ApplicationTab(self.app_frame, root, self.chrome, global_save=self.save_all)
 
         self.current = None
